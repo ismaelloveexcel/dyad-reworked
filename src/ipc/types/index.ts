@@ -55,7 +55,15 @@ export { audioContracts } from "./audio";
 export { mediaContracts } from "./media";
 export { imageGenerationContracts } from "./image_generation";
 export { factoryContracts } from "./factory";
-export type { IdeaEvaluationResult, IdeaScores } from "./factory";
+export type {
+  IdeaEvaluationResult,
+  IdeaScores,
+  IdeaRegion,
+  NoveltyFlags,
+  PatternEntry,
+  GeneratePortfolioResponse,
+  GeneratePortfolioParams,
+} from "./factory";
 
 // =============================================================================
 // Client Exports

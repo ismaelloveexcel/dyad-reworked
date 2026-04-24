@@ -1,5 +1,10 @@
 import { useState, useCallback } from "react";
-import { factoryClient, type IdeaEvaluationResult } from "@/ipc/types/factory";
+import {
+  factoryClient,
+  type IdeaEvaluationResult,
+  type PatternEntry,
+  type GeneratePortfolioResponse,
+} from "@/ipc/types/factory";
 
 // =============================================================================
 // Local storage persistence
@@ -93,6 +98,49 @@ function saveTraction(items: TractionEntry[]) {
 }
 
 // =============================================================================
+// Pattern Engine — extract learned patterns from history + pipeline + traction
+// =============================================================================
+
+function extractPatterns(
+  history: IdeaEvaluationResult[],
+  pipeline: PipelineEntry[],
+  traction: TractionEntry[],
+): PatternEntry[] {
+  return history.slice(0, 30).map((item) => {
+    const pe = pipeline.find((p) => p.name === item.name);
+    const te = traction.find((t) => t.name === item.name);
+
+    const t = item.idea.toLowerCase();
+    let category = "general";
+    if (/salary|payroll|compensation|hr/.test(t)) category = "hr-finance";
+    else if (/legal|compliance|contract|visa|permit/.test(t)) category = "legal-compliance";
+    else if (/marketing|social|viral|share/.test(t)) category = "marketing";
+    else if (/resume|cv|career|job/.test(t)) category = "career";
+    else if (/invoice|proposal|freelance|client/.test(t)) category = "freelance";
+    else if (/tax|vat|accounting|finance/.test(t)) category = "finance";
+
+    let status: PatternEntry["status"] = "unknown";
+    if (pe) {
+      if (pe.status === "Launched") status = "launched";
+      else if (pe.status === "Killed") status = "killed";
+      else if (pe.status === "Built") status = "built";
+      else status = "ignored";
+    }
+
+    return {
+      name: item.name,
+      category,
+      region: item.region?.primary,
+      viralScore: item.scores.virality,
+      revenueScore: item.scores.monetisation,
+      status,
+      revenue: te?.revenue,
+      shares: te?.shares,
+    };
+  });
+}
+
+// =============================================================================
 // Utility
 // =============================================================================
 
@@ -143,12 +191,20 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
 // Idea card
 // =============================================================================
 
+const ENGINE_LABELS: Record<string, { label: string; color: string }> = {
+  revenue: { label: "Revenue Engine", color: "text-emerald-300 bg-emerald-950/60 border-emerald-800" },
+  viral: { label: "Viral Engine", color: "text-violet-300 bg-violet-950/60 border-violet-800" },
+  experimental: { label: "Experimental", color: "text-amber-300 bg-amber-950/60 border-amber-800" },
+};
+
 function IdeaCard({
   result,
   onClose,
+  portfolioLink,
 }: {
   result: IdeaEvaluationResult;
   onClose?: () => void;
+  portfolioLink?: string;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -160,11 +216,198 @@ function IdeaCard({
     }
   };
 
+  const engineMeta = result.engineType ? ENGINE_LABELS[result.engineType] : null;
+
   return (
     <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 space-y-5">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
-        <div>
+        <div className="space-y-1">
+          <h3 className="text-lg font-semibold text-white">{result.name}</h3>
+          <p className="text-sm text-zinc-400">{result.buyer}</p>
+          {result.idea && (
+            <p className="text-xs text-zinc-600 leading-relaxed max-w-xl">{result.idea}</p>
+          )}
+        </div>
+        <div className="flex flex-col items-end gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            {engineMeta && (
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${engineMeta.color}`}>
+                {engineMeta.label}
+              </span>
+            )}
+            <span
+              className={`text-xs font-bold px-3 py-1 rounded-full border ${decisionColor(result.decision)}`}
+            >
+              {result.decision}
+            </span>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="text-zinc-500 hover:text-white transition-colors text-lg leading-none"
+                aria-label="Close"
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {/* Revenue Probability + Time to Revenue */}
+          {(result.revenueProbability !== undefined || result.timeToFirstRevenue !== undefined) && (
+            <div className="flex items-center gap-2">
+              {result.revenueProbability !== undefined && (
+                <span className={`text-xs px-2 py-0.5 rounded bg-zinc-800 border border-zinc-700 ${scoreColor(result.revenueProbability)}`}>
+                  Rev prob {result.revenueProbability}/5
+                </span>
+              )}
+              {result.timeToFirstRevenue && (
+                <span className={`text-xs px-2 py-0.5 rounded border ${result.timeToFirstRevenue === "Fast" ? "text-emerald-400 bg-emerald-950/40 border-emerald-800" : result.timeToFirstRevenue === "Medium" ? "text-amber-400 bg-amber-950/40 border-amber-800" : "text-red-400 bg-red-950/40 border-red-800"}`}>
+                  {result.timeToFirstRevenue}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Scores */}
+      <div className="space-y-2">
+        <div className="flex justify-between items-center mb-3">
+          <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+            Scores
+          </span>
+          <span className="text-sm font-semibold text-white">
+            Total:{" "}
+            <span className={scoreColor(result.totalScore / 8)}>
+              {result.totalScore}
+              <span className="text-zinc-500">/40</span>
+            </span>
+          </span>
+        </div>
+        <ScoreBar label="Buyer Clarity" value={result.scores.buyerClarity} />
+        <ScoreBar label="Pain Urgency" value={result.scores.painUrgency} />
+        <ScoreBar label="Market Exists" value={result.scores.marketExistence} />
+        <ScoreBar label="Differentiation" value={result.scores.differentiation} />
+        <ScoreBar label="Not Replaceable" value={result.scores.replaceability} />
+        <ScoreBar label="Virality" value={result.scores.virality} />
+        <ScoreBar label="Monetisation" value={result.scores.monetisation} />
+        <ScoreBar label="Build Simplicity" value={result.scores.buildSimplicity} />
+      </div>
+
+      {/* Reason */}
+      <p className="text-sm text-zinc-300 leading-relaxed">{result.reason}</p>
+
+      {/* Monetisation + Viral */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-zinc-800/60 rounded-lg p-3">
+          <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">
+            Monetisation
+          </p>
+          <p className="text-sm text-zinc-200">{result.monetisationAngle}</p>
+        </div>
+        <div className="bg-zinc-800/60 rounded-lg p-3">
+          <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">
+            Viral Trigger
+          </p>
+          <p className="text-sm text-zinc-200">{result.viralTrigger}</p>
+        </div>
+      </div>
+
+      {/* Region */}
+      {result.region && (
+        <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-2">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">Region</span>
+            <span className="text-xs px-2 py-0.5 rounded bg-zinc-700 text-zinc-200 font-semibold">
+              {result.region.primary}
+            </span>
+            {result.region.secondary.map((s) => (
+              <span key={s} className="text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">
+                {s}
+              </span>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-emerald-600 mb-0.5">✓ Why it works</p>
+              <p className="text-xs text-zinc-300">{result.region.whyWorks}</p>
+            </div>
+            <div>
+              <p className="text-xs text-red-600 mb-0.5">✗ Where it fails</p>
+              <p className="text-xs text-zinc-300">{result.region.whyFails}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Novelty flags */}
+      {result.noveltyFlags && (
+        <div className="flex flex-wrap gap-2">
+          <span className="text-xs text-zinc-600">Novelty:</span>
+          {(
+            [
+              ["domainTwist", "Domain Twist"],
+              ["perspectiveFlip", "Perspective Flip"],
+              ["outputTransformation", "Output Transformation"],
+              ["constraintInjection", "Constraint Injection"],
+            ] as const
+          ).map(([key, label]) => (
+            <span
+              key={key}
+              className={`text-xs px-2 py-0.5 rounded border ${result.noveltyFlags![key] ? "text-emerald-400 border-emerald-800 bg-emerald-950/30" : "text-zinc-600 border-zinc-800"}`}
+            >
+              {result.noveltyFlags![key] ? "✓" : "✗"} {label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Portfolio link */}
+      {portfolioLink && (
+        <div className="rounded-lg border border-indigo-800 bg-indigo-950/20 p-3">
+          <p className="text-xs text-indigo-400 uppercase tracking-wider mb-1">Portfolio Link</p>
+          <p className="text-sm text-indigo-200">{portfolioLink}</p>
+        </div>
+      )}
+
+      {/* Improved idea */}
+      {result.improvedIdea && (
+        <div className="border border-amber-900/50 bg-amber-950/20 rounded-lg p-3">
+          <p className="text-xs text-amber-500 uppercase tracking-wider mb-1">
+            Improved Direction
+          </p>
+          <p className="text-sm text-amber-200">{result.improvedIdea}</p>
+        </div>
+      )}
+
+      {/* Build prompt */}
+      {result.decision === "BUILD" && result.buildPrompt && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Build Prompt
+            </span>
+            <button
+              onClick={handleCopy}
+              className="text-xs px-3 py-1.5 rounded-lg bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/60 border border-emerald-800 transition-colors"
+            >
+              {copied ? "Copied!" : "Copy Prompt"}
+            </button>
+          </div>
+          <pre className="text-xs text-zinc-400 bg-zinc-950 rounded-lg p-4 overflow-auto max-h-48 leading-relaxed whitespace-pre-wrap">
+            {result.buildPrompt}
+          </pre>
+        </div>
+      )}
+
+      {/* Fallback notice */}
+      {result.fallbackUsed && (
+        <p className="text-xs text-zinc-600 italic">
+          AI unavailable — local scoring used.
+        </p>
+      )}
+    </div>
+  );
+}
           <h3 className="text-lg font-semibold text-white">{result.name}</h3>
           <p className="text-sm text-zinc-400 mt-0.5">{result.buyer}</p>
         </div>
@@ -343,9 +586,199 @@ function ManualTab({
 }
 
 // =============================================================================
-// Auto-generator tab
+// Generate Portfolio tab — ONE BUTTON, Dual Engine, Pattern-aware
 // =============================================================================
 
+function GeneratePortfolioTab({
+  onResults,
+  patterns,
+}: {
+  onResults: (ideas: IdeaEvaluationResult[]) => void;
+  patterns: PatternEntry[];
+}) {
+  const [niche, setNiche] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [portfolio, setPortfolio] = useState<GeneratePortfolioResponse | null>(null);
+  const [expanded, setExpanded] = useState<"revenue" | "viral" | "experimental" | null>(null);
+
+  const handleGenerate = async () => {
+    setLoading(true);
+    setError(null);
+    setPortfolio(null);
+    setExpanded(null);
+    try {
+      const res = await factoryClient.generatePortfolio({
+        niche: niche.trim() || undefined,
+        patterns: patterns.length > 0 ? patterns : undefined,
+      });
+      setPortfolio(res);
+      onResults([res.revenueIdea, res.viralIdea, res.experimentalIdea]);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Generation failed. Please try again.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const ENGINE_CARDS = portfolio
+    ? ([
+        {
+          key: "revenue" as const,
+          idea: portfolio.revenueIdea,
+          badge: "Revenue Engine",
+          badgeColor: "text-emerald-300 bg-emerald-950/60 border-emerald-800",
+          tagline: "Fastest path to paid users",
+        },
+        {
+          key: "viral" as const,
+          idea: portfolio.viralIdea,
+          badge: "Viral Engine",
+          badgeColor: "text-violet-300 bg-violet-950/60 border-violet-800",
+          tagline: "< 30 sec to value · built to share",
+        },
+        {
+          key: "experimental" as const,
+          idea: portfolio.experimentalIdea,
+          badge: "Experimental",
+          badgeColor: "text-amber-300 bg-amber-950/60 border-amber-800",
+          tagline: "Needs refinement — worth exploring",
+        },
+      ] as const)
+    : null;
+
+  return (
+    <div className="space-y-6">
+      {/* Description */}
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+        <p className="text-sm text-zinc-300 leading-relaxed">
+          Generates exactly <span className="text-white font-semibold">3 ideas</span> using the{" "}
+          <span className="text-emerald-400">Dual Engine method</span>:{" "}
+          one optimised for <span className="text-emerald-300">Revenue</span>, one for{" "}
+          <span className="text-violet-300">Virality</span>, and one <span className="text-amber-300">Experimental</span> concept.
+          Each idea passes the <span className="text-white">Novelty Engine</span> (domain twist · perspective flip · output transformation · constraint injection)
+          and includes <span className="text-white">Region Recognition</span>.{" "}
+          {patterns.length > 0 && (
+            <span className="text-indigo-400">
+              Pattern Engine active — learning from {patterns.length} previous idea{patterns.length !== 1 ? "s" : ""}.
+            </span>
+          )}
+        </p>
+      </div>
+
+      {/* Niche input + Generate button */}
+      <div className="flex gap-3 items-end">
+        <div className="flex-1 space-y-1.5">
+          <label className="block text-xs font-medium text-zinc-400 uppercase tracking-wider">
+            Target niche <span className="text-zinc-600 normal-case">(optional)</span>
+          </label>
+          <input
+            type="text"
+            value={niche}
+            onChange={(e) => setNiche(e.target.value)}
+            placeholder="e.g. UAE HR managers, Mauritius fintech founders, GCC freelancers…"
+            className="w-full px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-zinc-100 text-sm placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
+            disabled={loading}
+            onKeyDown={(e) => e.key === "Enter" && !loading && handleGenerate()}
+          />
+        </div>
+        <button
+          onClick={handleGenerate}
+          disabled={loading}
+          className="shrink-0 px-8 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white text-sm font-semibold transition-colors"
+        >
+          {loading ? (
+            <span className="flex items-center gap-2">
+              <span className="w-3.5 h-3.5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              Generating…
+            </span>
+          ) : (
+            "Generate Portfolio"
+          )}
+        </button>
+      </div>
+
+      {error && (
+        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 text-sm text-red-300">
+          {error}
+        </div>
+      )}
+
+      {/* Portfolio result */}
+      {portfolio && ENGINE_CARDS && (
+        <div className="space-y-4">
+          {/* Portfolio link banner */}
+          <div className="rounded-xl border border-indigo-800 bg-indigo-950/30 p-4 flex items-start gap-3">
+            <span className="text-indigo-400 shrink-0 text-base mt-0.5">⇢</span>
+            <div>
+              <p className="text-xs text-indigo-400 uppercase tracking-wider font-medium mb-1">Portfolio Link</p>
+              <p className="text-sm text-indigo-200">{portfolio.portfolioLink}</p>
+            </div>
+          </div>
+
+          {portfolio.fallbackUsed && (
+            <p className="text-xs text-zinc-600 italic">
+              AI unavailable — using local fallback portfolio.
+            </p>
+          )}
+
+          {/* 3 engine cards */}
+          <div className="space-y-3">
+            {ENGINE_CARDS.map(({ key, idea, badge, badgeColor, tagline }) => (
+              <div key={key} className="rounded-xl border border-zinc-800 bg-zinc-900 overflow-hidden">
+                {/* Summary row — always visible */}
+                <button
+                  onClick={() => setExpanded(expanded === key ? null : key)}
+                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-zinc-800/40 transition-colors text-left"
+                >
+                  <div className="flex items-center gap-4 min-w-0">
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border shrink-0 ${badgeColor}`}>
+                      {badge}
+                    </span>
+                    <div className="min-w-0">
+                      <span className="font-semibold text-white truncate block">{idea.name}</span>
+                      <span className="text-xs text-zinc-500">{tagline}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0 ml-4">
+                    <span className={`text-xs px-2 py-0.5 rounded border ${decisionColor(idea.decision)}`}>
+                      {idea.decision}
+                    </span>
+                    <span className={`font-mono text-sm font-bold ${scoreColor(idea.totalScore / 8)}`}>
+                      {idea.totalScore}/40
+                    </span>
+                    {idea.timeToFirstRevenue && (
+                      <span className={`text-xs px-2 py-0.5 rounded border ${idea.timeToFirstRevenue === "Fast" ? "text-emerald-400 border-emerald-800" : idea.timeToFirstRevenue === "Medium" ? "text-amber-400 border-amber-800" : "text-red-400 border-red-800"}`}>
+                        {idea.timeToFirstRevenue}
+                      </span>
+                    )}
+                    <span className="text-zinc-500 text-sm">
+                      {expanded === key ? "↑" : "↓"}
+                    </span>
+                  </div>
+                </button>
+
+                {/* Expanded detail */}
+                {expanded === key && (
+                  <div className="border-t border-zinc-800 p-5">
+                    <IdeaCard
+                      result={idea}
+                      portfolioLink={key !== "experimental" ? portfolio.portfolioLink : undefined}
+                    />
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Legacy explorer tab (batch mode — kept for power users)
 type GenerateMode = "fast-money" | "premium" | "viral";
 
 function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void }) {
@@ -370,19 +803,17 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
       onResults(res.ideas);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Generation failed. Please try again.",
+        err instanceof Error ? err.message : "Generation failed. Please try again.",
       );
     } finally {
       setLoading(false);
     }
   };
 
-  const modeOptions: { value: GenerateMode; label: string; desc: string }[] = [
-    { value: "fast-money", label: "Fast Money", desc: "Quick wins, easy sales" },
-    { value: "premium", label: "Premium", desc: "High-value, $20+ products" },
-    { value: "viral", label: "Viral", desc: "Shareable, social-first" },
+  const modeOptions: { value: GenerateMode; label: string }[] = [
+    { value: "fast-money", label: "Fast Money" },
+    { value: "premium", label: "Premium" },
+    { value: "viral", label: "Viral" },
   ];
 
   return (
@@ -390,19 +821,17 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
           <label className="block text-sm font-medium text-zinc-300">
-            Niche or context{" "}
-            <span className="text-zinc-600">(optional)</span>
+            Niche <span className="text-zinc-600">(optional)</span>
           </label>
           <input
             type="text"
             value={niche}
             onChange={(e) => setNiche(e.target.value)}
-            placeholder="e.g. UAE HR managers, Mauritius freelancers…"
+            placeholder="e.g. UAE HR managers…"
             className="w-full px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-zinc-100 text-sm placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
             disabled={loading}
           />
         </div>
-
         <div className="space-y-2">
           <label className="block text-sm font-medium text-zinc-300">Mode</label>
           <div className="flex gap-2">
@@ -410,11 +839,7 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
               <button
                 key={opt.value}
                 onClick={() => setMode(opt.value)}
-                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
-                  mode === opt.value
-                    ? "bg-indigo-700 border-indigo-600 text-white"
-                    : "bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-600"
-                }`}
+                className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${mode === opt.value ? "bg-indigo-700 border-indigo-600 text-white" : "bg-zinc-900 border-zinc-700 text-zinc-400 hover:border-zinc-600"}`}
               >
                 {opt.label}
               </button>
@@ -422,42 +847,27 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
           </div>
         </div>
       </div>
-
       <button
         onClick={handleGenerate}
         disabled={loading}
         className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white text-sm font-medium transition-colors"
       >
-        {loading ? "Generating ideas…" : "Generate 10 Ideas"}
+        {loading ? "Generating…" : "Generate 10 Ideas"}
       </button>
-
       {error && (
-        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 text-sm text-red-300">
-          {error}
-        </div>
+        <div className="rounded-lg border border-red-900/50 bg-red-950/20 p-4 text-sm text-red-300">{error}</div>
       )}
-
       {ideas.length > 0 && (
         <div className="space-y-3">
           <div className="overflow-x-auto rounded-xl border border-zinc-800">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-zinc-800 bg-zinc-900/80">
-                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider w-8">
-                    #
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">
-                    Idea
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider hidden sm:table-cell">
-                    Buyer
-                  </th>
-                  <th className="text-right px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">
-                    Score
-                  </th>
-                  <th className="text-center px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">
-                    Decision
-                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider w-8">#</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Idea</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider hidden sm:table-cell">Buyer</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Score</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-zinc-500 uppercase tracking-wider">Decision</th>
                   <th className="px-4 py-3 w-24" />
                 </tr>
               </thead>
@@ -467,18 +877,13 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
                     key={i}
                     rank={i + 1}
                     idea={idea}
-                    onView={() =>
-                      setSelected(selected?.name === idea.name ? null : idea)
-                    }
+                    onView={() => setSelected(selected?.name === idea.name ? null : idea)}
                   />
                 ))}
               </tbody>
             </table>
           </div>
-
-          {selected && (
-            <IdeaCard result={selected} onClose={() => setSelected(null)} />
-          )}
+          {selected && <IdeaCard result={selected} onClose={() => setSelected(null)} />}
         </div>
       )}
     </div>
@@ -498,6 +903,13 @@ function IdeaRow({
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!idea.buildPrompt) return;
+    const ok = await copyToClipboard(idea.buildPrompt);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
     if (!idea.buildPrompt) return;
     const ok = await copyToClipboard(idea.buildPrompt);
     if (ok) {
@@ -1118,13 +1530,16 @@ function DashboardTab({
 // Main Factory page
 // =============================================================================
 
-type FactoryTab = "dashboard" | "auto" | "manual" | "history";
+type FactoryTab = "dashboard" | "portfolio" | "explore" | "manual" | "history";
 
 export default function FactoryPage() {
   const [activeTab, setActiveTab] = useState<FactoryTab>("dashboard");
   const [history, setHistory] = useState<IdeaEvaluationResult[]>(loadHistory);
   const [pipeline, setPipeline] = useState<PipelineEntry[]>(loadPipeline);
   const [traction, setTraction] = useState<TractionEntry[]>(loadTraction);
+
+  // Derived pattern data for Pattern Engine
+  const patterns = extractPatterns(history, pipeline, traction);
 
   const addToHistory = useCallback(
     (items: IdeaEvaluationResult | IdeaEvaluationResult[]) => {
@@ -1177,7 +1592,8 @@ export default function FactoryPage() {
 
   const tabs: { id: FactoryTab; label: string }[] = [
     { id: "dashboard", label: "Dashboard" },
-    { id: "auto", label: "Generate Portfolio" },
+    { id: "portfolio", label: "Generate Portfolio" },
+    { id: "explore", label: "Explore Ideas" },
     { id: "manual", label: "Manual Evaluation" },
     { id: "history", label: "History" },
   ];
@@ -1189,7 +1605,7 @@ export default function FactoryPage() {
         <div className="space-y-1">
           <h1 className="text-2xl font-bold text-white">App Factory V3</h1>
           <p className="text-sm text-zinc-400">
-            Evaluate ideas, build a pipeline, and track your first revenue.
+            Dual-engine idea factory — generates, filters, and learns what works.
           </p>
         </div>
 
@@ -1221,11 +1637,18 @@ export default function FactoryPage() {
             onAddToPipeline={handleAddToPipeline}
           />
         )}
-        {activeTab === "auto" && (
+        {activeTab === "portfolio" && (
+          <GeneratePortfolioTab
+            patterns={patterns}
+            onResults={(rs) => {
+              addToHistory(rs);
+            }}
+          />
+        )}
+        {activeTab === "explore" && (
           <AutoTab
             onResults={(rs) => {
               addToHistory(rs);
-              setActiveTab("dashboard");
             }}
           />
         )}
