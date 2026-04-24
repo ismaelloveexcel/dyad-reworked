@@ -54,6 +54,30 @@ export const PatternEntrySchema = z.object({
 });
 
 // =============================================================================
+// Build Queue Status (E2)
+// =============================================================================
+
+export const RunStatusSchema = z.enum([
+  "DECIDED",
+  "QUEUED",
+  "IN_PROGRESS",
+  "LAUNCHED",
+  "KILLED",
+]);
+export type RunStatus = z.infer<typeof RunStatusSchema>;
+
+// =============================================================================
+// Launch Outcome (E3 — pattern learning)
+// =============================================================================
+
+export const LaunchOutcomeSchema = z.object({
+  launched: z.boolean(),
+  revenueGenerated: z.boolean(),
+  notes: z.string(),
+});
+export type LaunchOutcome = z.infer<typeof LaunchOutcomeSchema>;
+
+// =============================================================================
 // Full Idea Evaluation Result
 // =============================================================================
 
@@ -70,13 +94,20 @@ export const IdeaEvaluationResultSchema = z.object({
   monetisationAngle: z.string(),
   viralTrigger: z.string(),
   fallbackUsed: z.boolean(),
-  // New enrichment fields — optional for backwards compat with stored data
+  // Enrichment fields — optional for backwards compat with stored data
   revenueProbability: z.number().min(1).max(5).optional(),
   timeToFirstRevenue: z.enum(["Fast", "Medium", "Slow"]).optional(),
   engineType: z.enum(["revenue", "viral", "experimental"]).optional(),
   region: IdeaRegionSchema.optional(),
   portfolioLink: z.string().optional(),
   noveltyFlags: NoveltyFlagsSchema.optional(),
+  // Run metadata — injected by listRuns from DB columns (E2, E4, E9)
+  runId: z.number().optional(),
+  runStatus: RunStatusSchema.optional(),
+  launchOutcome: LaunchOutcomeSchema.optional(),
+  promptVersion: z.string().optional(),
+  promptHash: z.string().optional(),
+  evaluatedAt: z.number().optional(), // unix ms — injected from createdAt DB column
 });
 
 export type IdeaEvaluationResult = z.infer<typeof IdeaEvaluationResultSchema>;
@@ -126,8 +157,12 @@ export const GeneratePortfolioResponseSchema = z.object({
   fallbackUsed: z.boolean(),
 });
 
-export type GeneratePortfolioParams = z.infer<typeof GeneratePortfolioParamsSchema>;
-export type GeneratePortfolioResponse = z.infer<typeof GeneratePortfolioResponseSchema>;
+export type GeneratePortfolioParams = z.infer<
+  typeof GeneratePortfolioParamsSchema
+>;
+export type GeneratePortfolioResponse = z.infer<
+  typeof GeneratePortfolioResponseSchema
+>;
 
 // =============================================================================
 // Factory Contracts
@@ -148,6 +183,49 @@ export const factoryContracts = {
     channel: "factory:generate-portfolio",
     input: GeneratePortfolioParamsSchema,
     output: GeneratePortfolioResponseSchema,
+  }),
+  // Persistence handlers (PATH A — SQLite)
+  saveRun: defineContract({
+    channel: "factory:save-run",
+    // Returns id + duplicate (E1): duplicate is the existing run if fingerprint collides
+    input: z.object({ idea: IdeaEvaluationResultSchema }),
+    output: z.object({
+      id: z.number(),
+      duplicate: IdeaEvaluationResultSchema.nullable(),
+    }),
+  }),
+  listRuns: defineContract({
+    channel: "factory:list-runs",
+    input: z.object({ limit: z.number().optional() }),
+    output: z.object({ runs: z.array(IdeaEvaluationResultSchema) }),
+  }),
+  deleteRun: defineContract({
+    channel: "factory:delete-run",
+    input: z.object({ id: z.number() }),
+    output: z.object({ success: z.boolean() }),
+  }),
+  clearRuns: defineContract({
+    channel: "factory:clear-runs",
+    input: z.object({}),
+    output: z.object({ count: z.number() }),
+  }),
+  // E2 — Build Queue Status
+  updateRunStatus: defineContract({
+    channel: "factory:update-run-status",
+    input: z.object({ id: z.number(), status: RunStatusSchema }),
+    output: z.object({ success: z.boolean() }),
+  }),
+  // E6 — Export Pipeline
+  exportRuns: defineContract({
+    channel: "factory:export-runs",
+    input: z.object({ filter: z.enum(["BUILD", "all"]).optional() }),
+    output: z.object({ success: z.boolean(), path: z.string().optional() }),
+  }),
+  // E3 — Pattern Learning: store launch outcome per run
+  updateLaunchOutcome: defineContract({
+    channel: "factory:update-launch-outcome",
+    input: z.object({ id: z.number(), outcome: LaunchOutcomeSchema }),
+    output: z.object({ success: z.boolean() }),
   }),
 } as const;
 

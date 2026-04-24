@@ -1,0 +1,144 @@
+# Factory System Rules
+
+Rules for extending or modifying the Factory V3 idea-evaluation engine.
+
+---
+
+## IPC Channels (as of v3.2)
+
+| Channel                         | Contract Key          | Direction       | Purpose                                                                              |
+| ------------------------------- | --------------------- | --------------- | ------------------------------------------------------------------------------------ |
+| `factory:evaluate-idea`         | `evaluateIdea`        | renderer → main | Score a single idea text via GPT-4o                                                  |
+| `factory:generate-ideas`        | `generateIdeas`       | renderer → main | Batch-generate 10 ideas (niche, mode)                                                |
+| `factory:generate-portfolio`    | `generatePortfolio`   | renderer → main | Generate a portfolio of ideas with pattern context                                   |
+| `factory:save-run`              | `saveRun`             | renderer → main | Persist an idea to SQLite; returns `{id, duplicate}`                                 |
+| `factory:list-runs`             | `listRuns`            | renderer → main | List persisted runs, injecting `runId/runStatus/evaluatedAt`                         |
+| `factory:delete-run`            | `deleteRun`           | renderer → main | Delete a single run by `id`                                                          |
+| `factory:clear-runs`            | `clearRuns`           | renderer → main | Delete all runs                                                                      |
+| `factory:update-run-status`     | `updateRunStatus`     | renderer → main | Change the `status` column of a run                                                  |
+| `factory:export-runs`           | `exportRuns`          | renderer → main | Save runs to a JSON file via Electron `dialog.showSaveDialog`                        |
+| `factory:update-launch-outcome` | `updateLaunchOutcome` | renderer → main | Record launch result and persist to both `ideaJson` blob and `launch_outcome` column |
+
+All contracts are defined in `src/ipc/types/factory.ts`. The client is auto-generated via `createClient(factoryContracts)`.
+
+---
+
+## Validation System
+
+- All idea validation is done in `src/ipc/handlers/factory_validator.ts` (pure, Node-only, no Electron).
+- `validateIdeaResult(raw, idea)` — parses LLM JSON, validates against `IdeaEvaluationResultSchema`, enriches with all derived fields.
+- `deterministicFallback(idea)` — deterministic scoring when AI is unavailable; always sets `fallbackUsed: true`.
+- `safeParseLlmJson(raw)` — strips markdown fences, parses JSON safely.
+- Tests are in `src/__tests__/factory_validator.test.ts` with `// @vitest-environment node`.
+- **Do not import Electron APIs** in `factory_validator.ts` — it must remain Node-only for unit testing.
+
+---
+
+## Persistence Model
+
+Database table: `factory_runs` (SQLite via Drizzle ORM)
+
+| Column           | Type                            | Notes                                                               |
+| ---------------- | ------------------------------- | ------------------------------------------------------------------- |
+| `id`             | INTEGER PK autoincrement        | Run identifier                                                      |
+| `idea_json`      | TEXT NOT NULL                   | Full `IdeaEvaluationResult` blob (JSON)                             |
+| `status`         | TEXT NOT NULL DEFAULT 'DECIDED' | One of: `DECIDED / QUEUED / IN_PROGRESS / LAUNCHED / KILLED`        |
+| `fingerprint`    | TEXT                            | Deduplication key: `stableHash(name+buyer+idea[:200])`              |
+| `launch_outcome` | TEXT                            | JSON blob of `LaunchOutcome` object                                 |
+| `prompt_version` | TEXT                            | Prompt version string (e.g. `"v3.2"`)                               |
+| `prompt_hash`    | TEXT                            | `stableHash(EVALUATE_PROMPT + GENERATE_PROMPT)` for drift detection |
+| `created_at`     | INTEGER timestamp               | Defaults to `unixepoch()`                                           |
+
+**IMPORTANT**: When saving an idea, always call `saveRun` from the renderer. Never write to `factory_runs` directly from the renderer — only the main process has DB access.
+
+### Deduplication (E1)
+
+`saveRun` computes a fingerprint and checks for an existing row before inserting. If a duplicate is found, it returns `{ id, duplicate: existingIdea }` without inserting. The UI shows a non-blocking warning banner.
+
+### runId injection (E2)
+
+`listRuns` injects `runId`, `runStatus`, and `evaluatedAt` from DB columns into each deserialized result. These fields are **not** stored in `ideaJson` (they come from dedicated columns).
+
+---
+
+## Prompt Versioning (E4)
+
+- `PROMPT_VERSION = "v3.2"` is defined in `factory_handlers.ts`.
+- `CURRENT_PROMPT_HASH` is computed lazily from the concatenated evaluate+generate prompt templates.
+- Every result returned by `evaluateIdea`, `generateIdeas`, and `generatePortfolio` is passed through `enrichResult()` which adds `promptVersion` and `promptHash`.
+- When saving a run, the handler stores these values in the dedicated `prompt_version` and `prompt_hash` columns.
+- **When changing prompts**, bump `PROMPT_VERSION` (e.g. `v3.2` → `v3.3`). `CURRENT_PROMPT_HASH` updates automatically.
+
+---
+
+## Retry Logic (E5)
+
+`callWithRetry(prompt)` wraps `callOpenAI(prompt)` with 3 attempts:
+
+- Retries only on `OpenAiRateLimit` (429/503) and `OpenAiTimeout` (AbortError).
+- Delays: 1 s → 3 s → 9 s (exponential backoff).
+- Does **not** retry on 400/401 (bad request / auth), or `InvalidLlmResponse`.
+
+---
+
+## Pattern Engine (E3/E7)
+
+`extractPatterns()` in `factory.tsx` builds a `PatternEntry[]` from history + pipeline + traction.
+
+- Respects `runStatus` from DB: `LAUNCHED` → `"launched"`, `KILLED` → `"killed"`.
+- Respects `launchOutcome` from DB: sets `revenue` from `revenueGenerated`.
+- **Weighting**: entries where `status === "launched"` AND `revenue > 0` are appended **3× total** to the pattern array, reinforcing winning patterns in portfolio generation.
+
+---
+
+## Error Handling
+
+All factory errors must use `DyadError` with one of these kinds:
+
+- `DyadErrorKind.MissingApiKey` — no OPENAI_API_KEY configured.
+- `DyadErrorKind.OpenAiTimeout` — AbortError from fetch.
+- `DyadErrorKind.OpenAiRateLimit` — HTTP 429 or 503.
+- `DyadErrorKind.InvalidLlmResponse` — empty or unparseable LLM response.
+- `DyadErrorKind.FactoryPersistenceFailure` — any SQLite/Drizzle error.
+
+---
+
+## How to Extend
+
+### Adding a new IPC handler
+
+1. Add Zod input/output schemas + `defineContract(...)` to `src/ipc/types/factory.ts`.
+2. Add the contract to `factoryContracts`.
+3. Implement `createTypedHandler(factoryContracts.newChannel, async (event, input) => { ... })` inside `registerFactoryHandlers()` in `factory_handlers.ts`.
+4. The renderer client picks it up automatically from `createClient(factoryContracts)`.
+
+### Adding a new DB column
+
+1. Write a new `drizzle/XXXX_description.sql` with `ALTER TABLE` statements.
+2. Add the entry to `drizzle/meta/_journal.json` with the correct `idx` (next in sequence).
+3. Update `src/db/schema.ts` to match.
+4. Run `npm run ts` to verify no type errors.
+
+### Adding a new score dimension
+
+1. Add the field to `IdeaScoresSchema` in `src/ipc/types/factory.ts`.
+2. Update `validateIdeaResult` in `factory_validator.ts` to read + clamp the new field.
+3. Update `deterministicFallback` to produce a value for it.
+4. Update `totalScore` calculation if needed.
+5. Add a test to `src/__tests__/factory_validator.test.ts`.
+
+---
+
+## Testing
+
+- Unit tests: `npx vitest run src/__tests__/factory_validator.test.ts`
+- Smoke test (Node-only): `npm run smoke`
+- Must always have `// @vitest-environment node` at top of test files touching factory validators.
+
+---
+
+## Security Notes
+
+- OpenAI API key is read from `process.env.OPENAI_API_KEY` in the main process. Never pass it to the renderer.
+- `safeParseLlmJson` strips markdown fences and limits parse attempts to prevent DoS via large payloads.
+- All user-supplied `idea` strings are truncated to 2000 chars before being sent to the prompt.

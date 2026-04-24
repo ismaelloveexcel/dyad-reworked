@@ -18,6 +18,17 @@ export enum DyadErrorKind {
   Internal = "internal",
   /** Unclassified; treated as reportable until call sites are migrated. */
   Unknown = "unknown",
+  // === Factory-specific kinds ===
+  /** OpenAI API key is absent or empty. */
+  MissingApiKey = "missing_api_key",
+  /** OpenAI request timed out or was aborted. */
+  OpenAiTimeout = "openai_timeout",
+  /** OpenAI returned HTTP 429 (rate-limited / quota exceeded). */
+  OpenAiRateLimit = "openai_rate_limit",
+  /** LLM output could not be parsed or failed schema validation. */
+  InvalidLlmResponse = "invalid_llm_response",
+  /** Factory persistence read/write failure. */
+  FactoryPersistenceFailure = "factory_persistence_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -28,6 +39,10 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.Conflict,
   DyadErrorKind.UserCancelled,
   DyadErrorKind.RateLimited,
+  // Factory-specific: these are expected non-bug conditions
+  DyadErrorKind.MissingApiKey,
+  DyadErrorKind.OpenAiRateLimit,
+  DyadErrorKind.InvalidLlmResponse,
 ]);
 
 /**

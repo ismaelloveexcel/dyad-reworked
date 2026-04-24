@@ -1,4 +1,29 @@
 {
+  "name": "Dyad Dev Container",
   "image": "mcr.microsoft.com/devcontainers/universal:2",
-  "features": {}
+  "features": {},
+  "postCreateCommand": "npm install && mkdir -p userData && npm run init-precommit",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "biomejs.biome",
+        "ms-playwright.playwright",
+        "drizzle-team.drizzle-vscode"
+      ],
+      "settings": {
+        "editor.defaultFormatter": "biomejs.biome",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "quickfix.biome": "explicit"
+        }
+      }
+    }
+  },
+  "forwardPorts": [6006],
+  "portsAttributes": {
+    "6006": {
+      "label": "Storybook",
+      "onAutoForward": "notify"
+    }
+  }
 }

@@ -1,10 +1,13 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   factoryClient,
   type IdeaEvaluationResult,
   type PatternEntry,
   type GeneratePortfolioResponse,
+  type RunStatus,
+  type LaunchOutcome,
 } from "@/ipc/types/factory";
+import { SafeLocalStorage } from "@/lib/safe_local_storage";
 
 // =============================================================================
 // Local storage persistence
@@ -66,35 +69,27 @@ function saveHistory(items: IdeaEvaluationResult[]) {
 }
 
 function loadPipeline(): PipelineEntry[] {
-  try {
-    const raw = localStorage.getItem(PIPELINE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as PipelineEntry[];
-  } catch {
-    return [];
-  }
+  return (
+    SafeLocalStorage.get<PipelineEntry[]>(PIPELINE_KEY, (v): v is PipelineEntry[] =>
+      Array.isArray(v),
+    ) ?? []
+  );
 }
 
 function savePipeline(items: PipelineEntry[]) {
-  try {
-    localStorage.setItem(PIPELINE_KEY, JSON.stringify(items));
-  } catch {}
+  SafeLocalStorage.set(PIPELINE_KEY, items);
 }
 
 function loadTraction(): TractionEntry[] {
-  try {
-    const raw = localStorage.getItem(TRACTION_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as TractionEntry[];
-  } catch {
-    return [];
-  }
+  return (
+    SafeLocalStorage.get<TractionEntry[]>(TRACTION_KEY, (v): v is TractionEntry[] =>
+      Array.isArray(v),
+    ) ?? []
+  );
 }
 
 function saveTraction(items: TractionEntry[]) {
-  try {
-    localStorage.setItem(TRACTION_KEY, JSON.stringify(items));
-  } catch {}
+  SafeLocalStorage.set(TRACTION_KEY, items);
 }
 
 // =============================================================================
@@ -106,7 +101,7 @@ function extractPatterns(
   pipeline: PipelineEntry[],
   traction: TractionEntry[],
 ): PatternEntry[] {
-  return history.slice(0, 30).map((item) => {
+  const entries: PatternEntry[] = history.slice(0, 30).map((item) => {
     const pe = pipeline.find((p) => p.name === item.name);
     const te = traction.find((t) => t.name === item.name);
 
@@ -126,18 +121,32 @@ function extractPatterns(
       else if (pe.status === "Built") status = "built";
       else status = "ignored";
     }
+    // E3: honour runStatus from DB for items saved via saveRun
+    if (item.runStatus === "LAUNCHED") status = "launched";
+    else if (item.runStatus === "KILLED") status = "killed";
 
-    return {
+    const entry: PatternEntry = {
       name: item.name,
       category,
       region: item.region?.primary,
       viralScore: item.scores.virality,
       revenueScore: item.scores.monetisation,
       status,
-      revenue: te?.revenue,
+      revenue: te?.revenue ?? item.launchOutcome?.revenueGenerated ? 1 : undefined,
       shares: te?.shares,
     };
+    return entry;
   });
+
+  // E3/E7 — weight launched+revenue entries 3x to reinforce winning patterns
+  const boosted: PatternEntry[] = [];
+  for (const e of entries) {
+    boosted.push(e);
+    if (e.status === "launched" && (e.revenue ?? 0) > 0) {
+      boosted.push(e, e); // 2 extra copies = 3x total weight
+    }
+  }
+  return boosted;
 }
 
 // =============================================================================
@@ -201,10 +210,12 @@ function IdeaCard({
   result,
   onClose,
   portfolioLink,
+  onRunStatusChange,
 }: {
   result: IdeaEvaluationResult;
   onClose?: () => void;
   portfolioLink?: string;
+  onRunStatusChange?: (runId: number, status: RunStatus) => void;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -402,9 +413,36 @@ function IdeaCard({
       {/* Fallback notice */}
       {result.fallbackUsed && (
         <p className="text-xs text-zinc-600 italic">
-          AI unavailable — local scoring used.
+          AI response invalid — local scoring used.
         </p>
       )}
+
+      {/* E2 — Queue for Build button */}
+      {result.decision === "BUILD" &&
+        result.runId != null &&
+        onRunStatusChange && (
+          <div className="flex items-center gap-2 pt-1">
+            {result.runStatus === "QUEUED" || result.runStatus === "IN_PROGRESS" ? (
+              <button
+                onClick={() => onRunStatusChange(result.runId!, "DECIDED")}
+                className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+              >
+                Dequeue
+              </button>
+            ) : result.runStatus === "LAUNCHED" ? (
+              <span className="text-xs px-3 py-1.5 rounded-lg bg-emerald-900/40 text-emerald-400 border border-emerald-800">
+                Launched ✓
+              </span>
+            ) : (
+              <button
+                onClick={() => onRunStatusChange(result.runId!, "QUEUED")}
+                className="text-xs px-3 py-1.5 rounded-lg bg-blue-900/50 text-blue-300 hover:bg-blue-800/60 border border-blue-800 transition-colors"
+              >
+                Queue for Build
+              </button>
+            )}
+          </div>
+        )}
     </div>
   );
 }
@@ -505,7 +543,7 @@ function IdeaCard({
       {/* Fallback notice */}
       {result.fallbackUsed && (
         <p className="text-xs text-zinc-600 italic">
-          AI unavailable — local scoring used.
+          AI response invalid — local scoring used.
         </p>
       )}
     </div>
@@ -602,7 +640,7 @@ function GeneratePortfolioTab({
   const [portfolio, setPortfolio] = useState<GeneratePortfolioResponse | null>(null);
   const [expanded, setExpanded] = useState<"revenue" | "viral" | "experimental" | null>(null);
 
-  const handleGenerate = async () => {
+  const handleGeneratePortfolio = async () => {
     setLoading(true);
     setError(null);
     setPortfolio(null);
@@ -681,11 +719,11 @@ function GeneratePortfolioTab({
             placeholder="e.g. UAE HR managers, Mauritius fintech founders, GCC freelancers…"
             className="w-full px-4 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-zinc-100 text-sm placeholder-zinc-600 focus:outline-none focus:border-zinc-500 transition-colors"
             disabled={loading}
-            onKeyDown={(e) => e.key === "Enter" && !loading && handleGenerate()}
+            onKeyDown={(e) => e.key === "Enter" && !loading && handleGeneratePortfolio()}
           />
         </div>
         <button
-          onClick={handleGenerate}
+          onClick={handleGeneratePortfolio}
           disabled={loading}
           className="shrink-0 px-8 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white text-sm font-semibold transition-colors"
         >
@@ -720,7 +758,7 @@ function GeneratePortfolioTab({
 
           {portfolio.fallbackUsed && (
             <p className="text-xs text-zinc-600 italic">
-              AI unavailable — using local fallback portfolio.
+              AI response invalid — local scoring used.
             </p>
           )}
 
@@ -789,7 +827,7 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
   const [ideas, setIdeas] = useState<IdeaEvaluationResult[]>([]);
   const [selected, setSelected] = useState<IdeaEvaluationResult | null>(null);
 
-  const handleGenerate = async () => {
+  const handleGenerateIdeas = async () => {
     setLoading(true);
     setError(null);
     setIdeas([]);
@@ -848,7 +886,7 @@ function AutoTab({ onResults }: { onResults: (r: IdeaEvaluationResult[]) => void
         </div>
       </div>
       <button
-        onClick={handleGenerate}
+        onClick={handleGenerateIdeas}
         disabled={loading}
         className="px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white text-sm font-medium transition-colors"
       >
@@ -969,11 +1007,29 @@ function IdeaRow({
 function HistoryTab({
   history,
   onClear,
+  onRunStatusChange,
 }: {
   history: IdeaEvaluationResult[];
   onClear: () => void;
+  onRunStatusChange?: (runId: number, status: RunStatus) => void;
 }) {
   const [selected, setSelected] = useState<IdeaEvaluationResult | null>(null);
+  // E9 — prompt version filter
+  const [versionFilter, setVersionFilter] = useState<string>("all");
+
+  // Collect distinct promptVersions from history
+  const promptVersions = useMemo(() => {
+    const vs = new Set<string>();
+    for (const item of history) {
+      if (item.promptVersion) vs.add(item.promptVersion);
+    }
+    return Array.from(vs).sort();
+  }, [history]);
+
+  const filtered = useMemo(() => {
+    if (versionFilter === "all") return history;
+    return history.filter((h) => h.promptVersion === versionFilter);
+  }, [history, versionFilter]);
 
   if (history.length === 0) {
     return (
@@ -988,22 +1044,40 @@ function HistoryTab({
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <span className="text-sm text-zinc-400">
-          {history.length} idea{history.length !== 1 ? "s" : ""} saved
+          {filtered.length} idea{filtered.length !== 1 ? "s" : ""}
+          {versionFilter !== "all" && ` (${versionFilter})`}
         </span>
-        <button
-          onClick={() => {
-            setSelected(null);
-            onClear();
-          }}
-          className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
-        >
-          Clear history
-        </button>
+        <div className="flex items-center gap-3">
+          {/* E9 — prompt version filter */}
+          {promptVersions.length > 0 && (
+            <select
+              value={versionFilter}
+              onChange={(e) => setVersionFilter(e.target.value)}
+              className="text-xs bg-zinc-800 border border-zinc-700 text-zinc-300 rounded-lg px-2 py-1.5 focus:outline-none focus:border-zinc-600"
+            >
+              <option value="all">All versions</option>
+              {promptVersions.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={() => {
+              setSelected(null);
+              onClear();
+            }}
+            className="text-xs text-zinc-600 hover:text-red-400 transition-colors"
+          >
+            Clear history
+          </button>
+        </div>
       </div>
       <div className="flex flex-wrap gap-2">
-        {history.map((item, i) => (
+        {filtered.map((item, i) => (
           <button
             key={i}
             onClick={() => setSelected(selected?.name === item.name ? null : item)}
@@ -1019,11 +1093,29 @@ function HistoryTab({
             <span className="text-xs text-zinc-300 group-hover:text-white transition-colors max-w-48 truncate">
               {item.name}
             </span>
+            {/* E2 — show queue status badge */}
+            {item.runStatus && item.runStatus !== "DECIDED" && (
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                  item.runStatus === "LAUNCHED"
+                    ? "bg-emerald-900/40 text-emerald-400 border-emerald-800"
+                    : item.runStatus === "KILLED"
+                      ? "bg-red-900/40 text-red-400 border-red-800"
+                      : "bg-blue-900/40 text-blue-400 border-blue-800"
+                }`}
+              >
+                {item.runStatus}
+              </span>
+            )}
           </button>
         ))}
       </div>
       {selected && (
-        <IdeaCard result={selected} onClose={() => setSelected(null)} />
+        <IdeaCard
+          result={selected}
+          onClose={() => setSelected(null)}
+          onRunStatusChange={onRunStatusChange}
+        />
       )}
     </div>
   );
@@ -1097,6 +1189,8 @@ function DashboardTab({
   onPipelineChange,
   onTractionChange,
   onAddToPipeline,
+  onExportRuns,
+  currentPromptVersion,
 }: {
   history: IdeaEvaluationResult[];
   pipeline: PipelineEntry[];
@@ -1104,10 +1198,15 @@ function DashboardTab({
   onPipelineChange: (updated: PipelineEntry[]) => void;
   onTractionChange: (updated: TractionEntry[]) => void;
   onAddToPipeline: (idea: IdeaEvaluationResult) => void;
+  onExportRuns?: (filter: "BUILD" | "all") => void;
+  currentPromptVersion?: string;
 }) {
   const builds = history.filter((h) => h.decision === "BUILD");
   const reworks = history.filter((h) => h.decision === "REWORK");
   const kills = history.filter((h) => h.decision === "KILL");
+  // E2 — queue counts from DB runStatus
+  const queued = history.filter((h) => h.runStatus === "QUEUED" || h.runStatus === "IN_PROGRESS");
+  const launched = history.filter((h) => h.runStatus === "LAUNCHED");
   const bestScore = history.length
     ? Math.max(...history.map((h) => h.totalScore))
     : 0;
@@ -1119,6 +1218,41 @@ function DashboardTab({
           year: "numeric",
         })
       : null;
+  // E8 — advanced analytics
+  const buildRate =
+    history.length > 0 ? Math.round((builds.length / history.length) * 100) : 0;
+  const avgScore =
+    history.length > 0
+      ? Math.round((history.reduce((s, h) => s + h.totalScore, 0) / history.length) * 10) / 10
+      : 0;
+  const fallbackRate =
+    history.length > 0
+      ? Math.round((history.filter((h) => h.fallbackUsed).length / history.length) * 100)
+      : 0;
+  // Ideas this week (based on evaluatedAt)
+  const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const thisWeek = history.filter((h) => h.evaluatedAt && h.evaluatedAt >= oneWeekAgo).length;
+  // Score distribution
+  const buckets = { low: 0, medium: 0, high: 0 };
+  for (const h of history) {
+    if (h.totalScore >= 32) buckets.high++;
+    else if (h.totalScore >= 24) buckets.medium++;
+    else buckets.low++;
+  }
+  // Top domain
+  const domainCounts: Record<string, number> = {};
+  for (const h of history) {
+    const t = h.idea.toLowerCase();
+    let cat = "general";
+    if (/salary|payroll|compensation|hr/.test(t)) cat = "hr-finance";
+    else if (/legal|compliance|contract|visa|permit/.test(t)) cat = "legal-compliance";
+    else if (/marketing|social|viral|share/.test(t)) cat = "marketing";
+    else if (/resume|cv|career|job/.test(t)) cat = "career";
+    else if (/invoice|proposal|freelance|client/.test(t)) cat = "freelance";
+    else if (/tax|vat|accounting|finance/.test(t)) cat = "finance";
+    domainCounts[cat] = (domainCounts[cat] ?? 0) + 1;
+  }
+  const topDomain = Object.entries(domainCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "—";
 
   // Top 3 opportunities
   const top3 = [...history]
@@ -1260,9 +1394,27 @@ function DashboardTab({
 
       {/* Portfolio Summary */}
       <div className="space-y-3">
-        <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
-          Portfolio Summary
-        </h2>
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
+            Portfolio Summary
+          </h2>
+          {/* E6 — Export + E9 — prompt version */}
+          <div className="flex items-center gap-3">
+            {currentPromptVersion && (
+              <span className="text-xs text-zinc-600 font-mono">
+                prompt {currentPromptVersion}
+              </span>
+            )}
+            {onExportRuns && history.length > 0 && (
+              <button
+                onClick={() => onExportRuns("BUILD")}
+                className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+              >
+                Export BUILD Queue
+              </button>
+            )}
+          </div>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <StatCard label="Total Evaluated" value={history.length} />
           <StatCard label="BUILD" value={builds.length} accent="green" />
@@ -1277,6 +1429,20 @@ function DashboardTab({
             label="Last Generated"
             value={lastDate ?? "—"}
             sub="date of last evaluation"
+          />
+          {/* E2 — Queue counts */}
+          <StatCard label="Queued / In Progress" value={queued.length} accent="default" />
+          <StatCard label="Launched" value={launched.length} accent="green" />
+          {/* E8 — Analytics */}
+          <StatCard label="BUILD Rate" value={`${buildRate}%`} accent={buildRate >= 30 ? "green" : "default"} />
+          <StatCard label="Avg Score" value={`${avgScore}/40`} accent={avgScore >= 28 ? "green" : avgScore >= 20 ? "amber" : "default"} />
+          <StatCard label="Fallback Rate" value={`${fallbackRate}%`} accent={fallbackRate > 30 ? "red" : "default"} sub="AI vs local scoring" />
+          <StatCard label="Top Domain" value={topDomain} />
+          <StatCard label="Ideas This Week" value={thisWeek} />
+          <StatCard
+            label="Score Distribution"
+            value={`${buckets.high}H / ${buckets.medium}M / ${buckets.low}L`}
+            sub="≥32 / 24-31 / <24"
           />
         </div>
       </div>
@@ -1534,28 +1700,94 @@ type FactoryTab = "dashboard" | "portfolio" | "explore" | "manual" | "history";
 
 export default function FactoryPage() {
   const [activeTab, setActiveTab] = useState<FactoryTab>("dashboard");
-  const [history, setHistory] = useState<IdeaEvaluationResult[]>(loadHistory);
+  const [history, setHistory] = useState<IdeaEvaluationResult[]>([]);
   const [pipeline, setPipeline] = useState<PipelineEntry[]>(loadPipeline);
   const [traction, setTraction] = useState<TractionEntry[]>(loadTraction);
+  // E1 — duplicate warning (non-blocking banner)
+  const [duplicateWarning, setDuplicateWarning] = useState<{
+    id: number;
+    existing: IdeaEvaluationResult;
+  } | null>(null);
+
+  // Load history from DB on mount; migrate legacy localStorage data once
+  useEffect(() => {
+    // One-time migration: localStorage → DB
+    if (!localStorage.getItem("factory-v3-migrated")) {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const legacy = JSON.parse(raw) as IdeaEvaluationResult[];
+          for (const idea of legacy) {
+            factoryClient.saveRun({ idea }).catch(() => {});
+          }
+          localStorage.removeItem(STORAGE_KEY);
+        }
+      } catch {
+        // ignore migration errors
+      }
+      localStorage.setItem("factory-v3-migrated", "1");
+    }
+
+    // Load from DB
+    factoryClient
+      .listRuns({})
+      .then(({ runs }) => setHistory(runs))
+      .catch(() => {});
+  }, []);
 
   // Derived pattern data for Pattern Engine
-  const patterns = extractPatterns(history, pipeline, traction);
+  const patterns = useMemo(
+    () => extractPatterns(history, pipeline, traction),
+    [history, pipeline, traction],
+  );
 
   const addToHistory = useCallback(
     (items: IdeaEvaluationResult | IdeaEvaluationResult[]) => {
+      const arr = Array.isArray(items) ? items : [items];
+      // Persist each new item to DB; track returned runId (E1/E2)
+      for (const idea of arr) {
+        factoryClient
+          .saveRun({ idea })
+          .then(({ id, duplicate }) => {
+            if (duplicate) {
+              // E1 — non-blocking duplicate warning
+              setDuplicateWarning({ id, existing: duplicate });
+            } else {
+              // Inject runId back into the history entry
+              setHistory((prev) =>
+                prev.map((p) => (p.name === idea.name ? { ...p, runId: id, runStatus: "DECIDED" as RunStatus } : p)),
+              );
+            }
+          })
+          .catch(() => {});
+      }
       setHistory((prev) => {
-        const arr = Array.isArray(items) ? items : [items];
         const names = new Set(arr.map((i) => i.name));
-        const next = [
-          ...arr,
-          ...prev.filter((p) => !names.has(p.name)),
-        ].slice(0, 50);
-        saveHistory(next);
-        return next;
+        return [...arr, ...prev.filter((p) => !names.has(p.name))].slice(0, 200);
       });
     },
     [],
   );
+
+  // E2 — update run status in DB and local state
+  const handleRunStatusChange = useCallback(
+    (runId: number, status: RunStatus) => {
+      factoryClient
+        .updateRunStatus({ id: runId, status })
+        .then(() => {
+          setHistory((prev) =>
+            prev.map((h) => (h.runId === runId ? { ...h, runStatus: status } : h)),
+          );
+        })
+        .catch(() => {});
+    },
+    [],
+  );
+
+  // E6 — export runs to file
+  const handleExportRuns = useCallback((filter: "BUILD" | "all") => {
+    factoryClient.exportRuns({ filter }).catch(() => {});
+  }, []);
 
   const handlePipelineChange = (updated: PipelineEntry[]) => {
     setPipeline(updated);
@@ -1587,8 +1819,14 @@ export default function FactoryPage() {
 
   const clearHistory = () => {
     setHistory([]);
-    localStorage.removeItem(STORAGE_KEY);
+    factoryClient.clearRuns({}).catch(() => {});
   };
+
+  // Derive current prompt version from most recent history item that has one
+  const currentPromptVersion = useMemo(
+    () => history.find((h) => h.promptVersion)?.promptVersion,
+    [history],
+  );
 
   const tabs: { id: FactoryTab; label: string }[] = [
     { id: "dashboard", label: "Dashboard" },
@@ -1608,6 +1846,28 @@ export default function FactoryPage() {
             Dual-engine idea factory — generates, filters, and learns what works.
           </p>
         </div>
+
+        {/* E1 — Duplicate warning banner */}
+        {duplicateWarning && (
+          <div className="rounded-xl border border-amber-800 bg-amber-950/30 p-4 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-xs text-amber-400 font-medium uppercase tracking-wider mb-1">
+                Duplicate detected
+              </p>
+              <p className="text-sm text-amber-200">
+                "{duplicateWarning.existing.name}" was already saved (run #{duplicateWarning.id}).
+                No duplicate was created.
+              </p>
+            </div>
+            <button
+              onClick={() => setDuplicateWarning(null)}
+              className="text-amber-600 hover:text-amber-400 transition-colors text-lg leading-none shrink-0"
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex gap-1 bg-zinc-900 rounded-xl p-1 w-fit flex-wrap">
@@ -1635,6 +1895,8 @@ export default function FactoryPage() {
             onPipelineChange={handlePipelineChange}
             onTractionChange={handleTractionChange}
             onAddToPipeline={handleAddToPipeline}
+            onExportRuns={handleExportRuns}
+            currentPromptVersion={currentPromptVersion}
           />
         )}
         {activeTab === "portfolio" && (
@@ -1656,7 +1918,11 @@ export default function FactoryPage() {
           <ManualTab onResult={(r) => addToHistory(r)} />
         )}
         {activeTab === "history" && (
-          <HistoryTab history={history} onClear={clearHistory} />
+          <HistoryTab
+            history={history}
+            onClear={clearHistory}
+            onRunStatusChange={handleRunStatusChange}
+          />
         )}
       </div>
     </div>

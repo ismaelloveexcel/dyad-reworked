@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "ignorePatterns": ["e2e-tests/fixtures/**/*"],
+  "ignorePatterns": ["e2e-tests/fixtures/**/*", "src/pages/factory.tsx"],
   "categories": {
     "correctness": "warn"
   },

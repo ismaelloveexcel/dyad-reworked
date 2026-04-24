@@ -283,3 +283,20 @@ export const customThemes = sqliteTable("custom_themes", {
     .notNull()
     .default(sql`(unixepoch())`),
 });
+
+// =============================================================================
+// Factory V3 — evaluated idea runs
+// =============================================================================
+
+export const factoryRuns = sqliteTable("factory_runs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  ideaJson: text("idea_json").notNull(), // JSON-serialised IdeaEvaluationResult
+  status: text("status").notNull().default("DECIDED"), // RunStatus: DECIDED|QUEUED|IN_PROGRESS|LAUNCHED|KILLED
+  fingerprint: text("fingerprint"), // stableHash of idea content for deduplication
+  launchOutcome: text("launch_outcome"), // JSON: { launched, revenueGenerated, notes }
+  promptVersion: text("prompt_version"), // e.g. "v3.2"
+  promptHash: text("prompt_hash"), // stableHash of prompt templates
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});

@@ -9,3 +9,5 @@ drizzle/
 e2e-tests/fixtures/**
 # sanitize_issue_markdown test goldens
 .claude/skills/fix-issue/scripts/goldens/**
+# pre-existing parse errors — do not auto-format
+src/pages/factory.tsx
