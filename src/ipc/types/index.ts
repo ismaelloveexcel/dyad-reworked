@@ -54,6 +54,8 @@ export { freeAgentQuotaContracts } from "./free_agent_quota";
 export { audioContracts } from "./audio";
 export { mediaContracts } from "./media";
 export { imageGenerationContracts } from "./image_generation";
+export { factoryContracts } from "./factory";
+export type { IdeaEvaluationResult, IdeaScores } from "./factory";
 
 // =============================================================================
 // Client Exports
@@ -87,6 +89,7 @@ export { freeAgentQuotaClient } from "./free_agent_quota";
 export { audioClient } from "./audio";
 export { mediaClient } from "./media";
 export { imageGenerationClient } from "./image_generation";
+export { factoryClient } from "./factory";
 
 // =============================================================================
 // Type Exports

@@ -5,6 +5,7 @@ import {
   HelpCircle,
   Store,
   BookOpen,
+  FlaskConical,
 } from "lucide-react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useSidebar } from "@/components/ui/sidebar"; // import useSidebar hook
@@ -56,6 +57,11 @@ const items = [
     title: "Hub",
     to: "/hub",
     icon: Store,
+  },
+  {
+    title: "Factory",
+    to: "/factory",
+    icon: FlaskConical,
   },
 ];
 
