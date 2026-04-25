@@ -30,6 +30,29 @@ export default defineConfig({
       }
       // Allow all other console output (including errors) for debugging
     },
+    coverage: {
+      provider: "v8",
+      include: [
+        "src/ipc/handlers/factory_handlers.ts",
+        "src/pages/factory.tsx",
+      ],
+      thresholds: {
+        // factory_handlers.ts is covered by factory_handlers.test.ts
+        "src/ipc/handlers/factory_handlers.ts": {
+          lines: 55,
+          branches: 40,
+          functions: 65,
+        },
+        // factory.tsx is a React page; coverage is primarily from E2E tests.
+        // The unit threshold is intentionally low — raise it as component
+        // tests are added in later PRs.
+        "src/pages/factory.tsx": {
+          lines: 5,
+          branches: 5,
+          functions: 5,
+        },
+      },
+    },
   },
   resolve: {
     alias: {

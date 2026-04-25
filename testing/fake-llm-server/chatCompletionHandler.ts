@@ -27,6 +27,105 @@ export const createChatCompletionHandler =
       });
     }
 
+    // ---------------------------------------------------------------------------
+    // Factory handler: return valid factory JSON for factory:* IPC calls.
+    // All three factory OpenAI calls use the same system message prefix, so we
+    // branch on the user message to return the correct response shape for each:
+    //   - evaluate-idea  → single IdeaEvaluationResult JSON object
+    //   - generate-ideas → JSON array of IdeaEvaluationResult objects
+    //   - generate-portfolio → GeneratePortfolioResponse JSON object
+    // Detection is non-streaming + "app idea evaluator" in system msg + no tc=.
+    // ---------------------------------------------------------------------------
+    const systemMessage = messages.find((m: any) => m.role === "system");
+    const isFactorySystemMsg =
+      !stream &&
+      systemMessage &&
+      typeof systemMessage.content === "string" &&
+      (systemMessage.content.includes("app idea evaluator") ||
+        systemMessage.content.includes("app idea strategist")) &&
+      !(
+        typeof lastMessage?.content === "string" &&
+        lastMessage.content.startsWith("tc=")
+      );
+
+    if (isFactorySystemMsg) {
+      const userMsg = messages.find((m: any) => m.role === "user");
+      const userText =
+        typeof userMsg?.content === "string" ? userMsg.content : "";
+
+      // Build a reusable single-idea fixture
+      const makeFakeIdea = (
+        engineType?: string,
+        idea?: string,
+        decision?: string,
+      ) => ({
+        idea: idea ?? "Fake factory idea from test server",
+        name: "Fake Factory Tool",
+        buyer: "Test buyers",
+        engineType: engineType ?? undefined,
+        scores: {
+          buyerClarity: 4,
+          painUrgency: 4,
+          marketExistence: 3,
+          differentiation: 3,
+          replaceability: 3,
+          virality: 3,
+          monetisation: 4,
+          buildSimplicity: 4,
+        },
+        totalScore: 28,
+        decision: decision ?? "BUILD",
+        reason: "Fake evaluation from test fake-llm-server.",
+        improvedIdea: "",
+        buildPrompt: "Build the fake factory tool here.",
+        monetisationAngle: "One-time payment",
+        viralTrigger: "Share your score",
+        fallbackUsed: false,
+      });
+
+      let factoryResponse: string;
+
+      if (userText.includes("Generate EXACTLY 3 app ideas")) {
+        // generate-portfolio → portfolio JSON object
+        factoryResponse = JSON.stringify({
+          revenueIdea: makeFakeIdea("revenue"),
+          viralIdea: makeFakeIdea("viral"),
+          experimentalIdea: makeFakeIdea("experimental", undefined, "REWORK"),
+          portfolioLink:
+            "Viral idea drives free users into the revenue idea funnel.",
+        });
+      } else if (userText.startsWith("Generate exactly 10 monetisable")) {
+        // generate-ideas → JSON array
+        factoryResponse = JSON.stringify([
+          makeFakeIdea(undefined, "Idea A from fake server"),
+          makeFakeIdea(undefined, "Idea B from fake server"),
+        ]);
+      } else {
+        // evaluate-idea → single IdeaEvaluationResult
+        const ideaMatch = userText.match(
+          /Evaluate this app idea for a solo developer: "([^"]+)"/,
+        );
+        const ideaText = ideaMatch
+          ? ideaMatch[1]
+          : "Salary benchmark tool for UAE professionals";
+        factoryResponse = JSON.stringify(makeFakeIdea(undefined, ideaText));
+      }
+
+      return res.json({
+        id: `chatcmpl-factory-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: "fake-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: factoryResponse },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    }
+
     // Check for local-agent fixture requests (tc=local-agent/*)
     // We need to check ALL user messages, not just the last one, because
     // outer loop follow-up requests inject a todo reminder as the last user message.
