@@ -41,6 +41,7 @@ export const SETTING_IDS = {
     "setting-enable-select-app-from-home-chat-input",
   factoryScoreThreshold: "setting-factory-score-threshold",
   factoryProvider: "setting-factory-provider",
+  factoryEmbeddingDedup: "setting-factory-embedding-dedup",
   reset: "setting-reset",
 } as const;
 
@@ -422,6 +423,23 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
       "model",
       "ai",
       "routing",
+    ],
+    sectionId: SECTION_IDS.workflow,
+    sectionLabel: "Workflow",
+  },
+  {
+    id: SETTING_IDS.factoryEmbeddingDedup,
+    label: "Factory Semantic Dedup",
+    description:
+      "Use OpenAI text-embedding-3-small to detect semantically similar ideas and prevent near-duplicate runs. Requires OPENAI_API_KEY.",
+    keywords: [
+      "factory",
+      "embedding",
+      "dedup",
+      "similarity",
+      "novelty",
+      "duplicate",
+      "semantic",
     ],
     sectionId: SECTION_IDS.workflow,
     sectionLabel: "Workflow",

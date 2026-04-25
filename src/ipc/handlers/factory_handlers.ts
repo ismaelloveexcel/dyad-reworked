@@ -24,6 +24,13 @@ import {
   detectRegulatedDomain,
 } from "./factory_validator";
 import { buildBrandCss } from "./factory_brand";
+import {
+  cosineSimilarity,
+  computeNoveltyScore,
+  serializeEmbedding,
+  deserializeEmbedding,
+} from "@/core/factory/embeddings";
+import { fetchEmbedding } from "./factory_embeddings";
 import { readSettings } from "@/main/settings";
 import {
   PROMPT_VERSION,
@@ -579,6 +586,95 @@ export function registerFactoryHandlers() {
           | "anthropic"
           | "google"
           | undefined) ?? "openai";
+
+      // PR #9 — Embedding-based novelty / dedup
+      // When factoryEmbeddingDedup is enabled (default: true), fetch an
+      // embedding vector for this idea and:
+      //   1. Compute noveltyScore = 1 - max cosine similarity vs stored rows
+      //   2. Check if any stored embedding has similarity ≥ threshold → soft dup
+      //   3. Persist the embedding in the DB column for future comparisons
+      const embeddingEnabled = settings.factoryEmbeddingDedup !== false;
+      const similarityThreshold =
+        settings.factoryEmbeddingSimilarityThreshold ?? 0.92;
+
+      let embeddingVec: number[] | null = null;
+      let noveltyScore: number | undefined;
+
+      if (embeddingEnabled) {
+        try {
+          const ideaText = `${idea.name} — ${idea.buyer} — ${idea.idea}`;
+          embeddingVec = await fetchEmbedding(ideaText);
+
+          // Load all stored embeddings for similarity comparison
+          const storedRows = await db
+            .select({
+              id: factoryRuns.id,
+              embedding: factoryRuns.embedding,
+              ideaJson: factoryRuns.ideaJson,
+              status: factoryRuns.status,
+            })
+            .from(factoryRuns);
+
+          const storedVecs: number[][] = [];
+          let semanticDuplicate: {
+            id: number;
+            idea: IdeaEvaluationResult;
+            similarity: number;
+          } | null = null;
+
+          for (const row of storedRows) {
+            if (!row.embedding) continue;
+            const vec = deserializeEmbedding(row.embedding);
+            if (vec.length === 0) continue;
+            storedVecs.push(vec);
+
+            const sim = cosineSimilarity(embeddingVec, vec);
+            if (
+              sim >= similarityThreshold &&
+              (semanticDuplicate === null || sim > semanticDuplicate.similarity)
+            ) {
+              try {
+                const parsedIdea = JSON.parse(
+                  row.ideaJson,
+                ) as IdeaEvaluationResult;
+                semanticDuplicate = {
+                  id: row.id,
+                  idea: parsedIdea,
+                  similarity: sim,
+                };
+              } catch {
+                // ignore corrupt rows
+              }
+            }
+          }
+
+          noveltyScore = computeNoveltyScore(embeddingVec, storedVecs);
+
+          if (semanticDuplicate !== null) {
+            // Soft duplicate found via semantic similarity — return without inserting
+            logger.log(
+              `[factory] semantic dedup: similarity=${semanticDuplicate.similarity.toFixed(3)} with run #${semanticDuplicate.id}`,
+            );
+            return {
+              id: semanticDuplicate.id,
+              duplicate: {
+                ...semanticDuplicate.idea,
+                runId: semanticDuplicate.id,
+                runStatus:
+                  (semanticDuplicate.idea.runStatus as RunStatus) ?? "DECIDED",
+              },
+            };
+          }
+        } catch (embErr) {
+          // Embedding failures are non-fatal — log and fall through without
+          // novelty score or semantic dedup so ideas can still be saved.
+          logger.warn(
+            "[factory] embedding fetch failed, skipping novelty/dedup:",
+            embErr,
+          );
+        }
+      }
+
       const enriched: IdeaEvaluationResult = {
         ...idea,
         promptVersion: idea.promptVersion ?? PROMPT_VERSION,
@@ -587,6 +683,7 @@ export function registerFactoryHandlers() {
           idea.modelVersion ?? getFactoryModelVersion(activeProvider),
         regulatedDomain:
           idea.regulatedDomain ?? detectRegulatedDomain(idea.idea),
+        ...(noveltyScore !== undefined ? { noveltyScore } : {}),
       };
       const result = await db
         .insert(factoryRuns)
@@ -597,6 +694,8 @@ export function registerFactoryHandlers() {
           promptVersion: enriched.promptVersion,
           promptHash: enriched.promptHash,
           modelVersion: enriched.modelVersion,
+          embedding:
+            embeddingVec !== null ? serializeEmbedding(embeddingVec) : null,
         })
         .returning({ id: factoryRuns.id });
       return { id: result[0].id, duplicate: null };
@@ -870,6 +969,63 @@ export function registerFactoryHandlers() {
       );
     }
   });
+
+  // ===========================================================================
+  // PR #9 — Embedding-based similarity search
+  // Returns up to `limit` stored runs sorted by cosine similarity to the
+  // given idea text (most similar first). Requires OPENAI_API_KEY (embedding
+  // is fetched via text-embedding-3-small).
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.getSimilarRuns,
+    async (_, { ideaText, limit = 5, excludeRunId }) => {
+      try {
+        const queryVec = await fetchEmbedding(ideaText);
+
+        const rows = await db
+          .select({
+            id: factoryRuns.id,
+            ideaJson: factoryRuns.ideaJson,
+            status: factoryRuns.status,
+            embedding: factoryRuns.embedding,
+          })
+          .from(factoryRuns);
+
+        type ScoredRun = IdeaEvaluationResult & { similarity: number };
+        const scored: ScoredRun[] = [];
+
+        for (const row of rows) {
+          if (excludeRunId !== undefined && row.id === excludeRunId) continue;
+          if (!row.embedding) continue;
+          const vec = deserializeEmbedding(row.embedding);
+          if (vec.length === 0) continue;
+          const similarity = cosineSimilarity(queryVec, vec);
+          try {
+            const idea = JSON.parse(row.ideaJson) as IdeaEvaluationResult;
+            scored.push({
+              ...idea,
+              runId: row.id,
+              runStatus: (row.status as RunStatus) ?? "DECIDED",
+              similarity,
+            });
+          } catch {
+            // skip corrupt rows
+          }
+        }
+
+        // Sort by similarity descending, then return top `limit`
+        scored.sort((a, b) => b.similarity - a.similarity);
+        return { runs: scored.slice(0, limit) };
+      } catch (err) {
+        if (err instanceof DyadError) throw err;
+        throw new DyadError(
+          `Failed to find similar runs: ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.FactoryPersistenceFailure,
+        );
+      }
+    },
+  );
 
   // ===========================================================================
   // PR #6 — Deterministic scaffolder

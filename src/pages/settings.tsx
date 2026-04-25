@@ -38,6 +38,7 @@ import { BlockUnsafeNpmPackagesSwitch } from "@/components/BlockUnsafeNpmPackage
 import { CloudSandboxExperimentSwitch } from "@/components/CloudSandboxExperimentSwitch";
 import { FactoryScoreThresholdSetting } from "@/components/FactoryScoreThresholdSetting";
 import { FactoryProviderSetting } from "@/components/FactoryProviderSetting";
+import { FactoryEmbeddingDedupSwitch } from "@/components/FactoryEmbeddingDedupSwitch";
 import { useSetAtom } from "jotai";
 import { activeSettingsSectionAtom } from "@/atoms/viewAtoms";
 import { SECTION_IDS, SETTING_IDS } from "@/lib/settingsSearchIndex";
@@ -441,6 +442,10 @@ export function WorkflowSettings() {
 
       <div id={SETTING_IDS.factoryProvider} className="space-y-1 mt-4">
         <FactoryProviderSetting />
+      </div>
+
+      <div id={SETTING_IDS.factoryEmbeddingDedup} className="space-y-1 mt-4">
+        <FactoryEmbeddingDedupSwitch />
       </div>
     </div>
   );

@@ -131,6 +131,9 @@ export const IdeaEvaluationResultSchema = z.object({
   evaluatedAt: z.number().optional(), // unix ms — injected from createdAt DB column
   // PR #3 — regulated-domain flag (legal/HR/visa/medical/financial content)
   regulatedDomain: z.boolean().optional(),
+  // PR #9 — novelty score: 1 - max cosine similarity vs all stored embeddings.
+  // 1.0 = fully unique, 0.0 = identical to an existing idea in the library.
+  noveltyScore: z.number().min(0).max(1).optional(),
 });
 
 export type IdeaEvaluationResult = z.infer<typeof IdeaEvaluationResultSchema>;
@@ -269,6 +272,25 @@ export const factoryContracts = {
     input: z.object({ runId: z.number() }),
     output: z.object({
       outcomes: z.array(QuantitativeLaunchOutcomeSchema),
+    }),
+  }),
+  // PR #9 — Embedding-based similarity search.
+  // Returns up to `limit` stored runs sorted by cosine similarity to the
+  // given idea text (most similar first), excluding the run with `excludeRunId`
+  // (used to avoid returning the idea being compared against itself).
+  getSimilarRuns: defineContract({
+    channel: "factory:get-similar-runs",
+    input: z.object({
+      ideaText: z.string().min(1),
+      limit: z.number().int().min(1).max(20).optional(),
+      excludeRunId: z.number().int().optional(),
+    }),
+    output: z.object({
+      runs: z.array(
+        IdeaEvaluationResultSchema.extend({
+          similarity: z.number().min(0).max(1),
+        }),
+      ),
     }),
   }),
   // PR #6 — Deterministic scaffolder: copies scaffold/ template, runs codemods,

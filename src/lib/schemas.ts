@@ -375,6 +375,18 @@ const BaseUserSettingsFields = {
     .enum(["openai", "anthropic", "google"])
     .optional()
     .catch(undefined),
+  // PR #9 — Embedding-based novelty/dedup toggle. When true (default), saveRun
+  // fetches an OpenAI text-embedding-3-small vector and checks cosine similarity
+  // against all stored runs before inserting. Requires OPENAI_API_KEY.
+  factoryEmbeddingDedup: z.boolean().optional(),
+  // PR #9 — Cosine similarity threshold above which two ideas are considered
+  // semantic duplicates. Range [0, 1]; default 0.92. Higher = stricter dedup.
+  factoryEmbeddingSimilarityThreshold: z
+    .number()
+    .min(0)
+    .max(1)
+    .optional()
+    .catch(undefined),
 };
 
 /**
