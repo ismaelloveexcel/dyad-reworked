@@ -41,6 +41,8 @@ export enum DyadErrorKind {
   QualityGateRejection = "quality_gate_rejection",
   /** factory:scaffoldApp failed to copy template, run codemods, or build. */
   ScaffoldFailure = "scaffold_failure",
+  /** factory:generateLaunchKit failed to generate or export launch assets. */
+  LaunchKitFailure = "launch_kit_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -60,6 +62,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.QualityGateRejection,
   // Scaffold failures are user-visible build errors, not bugs — exclude from PostHog
   DyadErrorKind.ScaffoldFailure,
+  // Launch-kit generation/export errors are user-visible, not bugs
+  DyadErrorKind.LaunchKitFailure,
 ]);
 
 /**

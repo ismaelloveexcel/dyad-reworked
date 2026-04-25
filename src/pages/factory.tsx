@@ -5,6 +5,7 @@ import {
   type PatternEntry,
   type GeneratePortfolioResponse,
   type RunStatus,
+  type LaunchKit,
   factoryClient,
 } from "@/ipc/types/factory";
 import {
@@ -298,6 +299,156 @@ function ScaffoldSection({
 }
 
 // =============================================================================
+// PR #10 — Launch Kit section — shown inside IdeaCard for BUILD ideas that
+// have been persisted (runId present).  Triggers factory:generate-launch-kit
+// which calls the active LLM provider and returns structured launch assets.
+// =============================================================================
+
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    const ok = await copyToClipboard(text);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="text-xs px-2.5 py-1 rounded-lg bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-zinc-700 transition-colors shrink-0"
+      aria-label={`Copy ${label}`}
+    >
+      {copied ? "Copied!" : "Copy"}
+    </button>
+  );
+}
+
+function LaunchKitField({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          {label}
+        </span>
+        <CopyButton text={value} label={label} />
+      </div>
+      <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap bg-zinc-900 rounded-md px-3 py-2">
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function LaunchKitSection({ result }: { result: IdeaEvaluationResult }) {
+  const runId = result.runId;
+
+  const generateMutation = useMutation<LaunchKit, Error, void>({
+    mutationKey: queryKeys.factory.launchKit(runId ?? 0),
+    mutationFn: () => factoryClient.generateLaunchKit({ runId: runId! }),
+  });
+
+  const exportMutation = useMutation<{ path: string }, Error, LaunchKit>({
+    mutationFn: (kit) =>
+      factoryClient.exportLaunchKit({ runId: runId!, kit }),
+  });
+
+  if (!runId || runId <= 0) return null;
+
+  const kit = generateMutation.data;
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          Launch Kit
+        </p>
+        {kit && (
+          <span className="text-xs text-emerald-400">✓ Generated</span>
+        )}
+      </div>
+
+      {!kit && (
+        <button
+          onClick={() => generateMutation.mutate()}
+          disabled={generateMutation.isPending}
+          className="text-xs px-3 py-1.5 rounded-lg bg-violet-900/50 text-violet-300 hover:bg-violet-800/60 disabled:bg-zinc-800 disabled:text-zinc-500 border border-violet-800 transition-colors"
+        >
+          {generateMutation.isPending ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full border-2 border-violet-300/30 border-t-violet-300 animate-spin" />
+              Generating…
+            </span>
+          ) : (
+            "🚀 Generate Launch Kit"
+          )}
+        </button>
+      )}
+
+      {generateMutation.isError && (
+        <p className="text-xs text-red-400 leading-relaxed">
+          {generateMutation.error.message}
+        </p>
+      )}
+
+      {kit && (
+        <div className="space-y-4">
+          <LaunchKitField label="Elevator Pitch" value={kit.elevatorPitch} />
+          <LaunchKitField label="X / Twitter Post" value={kit.twitterPost} />
+          <LaunchKitField label="LinkedIn Post" value={kit.linkedinPost} />
+          <LaunchKitField label="Hero Headline" value={kit.heroHeadline} />
+          <LaunchKitField label="Hero Subtext" value={kit.heroSubtext} />
+          <LaunchKitField label="Email Subject" value={kit.emailSubject} />
+          <LaunchKitField label="Cold Email Body" value={kit.emailBody} />
+
+          {/* Deploy checklist */}
+          <div className="space-y-1.5">
+            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+              Deploy Checklist
+            </span>
+            <ol className="space-y-1">
+              {kit.deployChecklist.map((step, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-zinc-300">
+                  <span className="font-mono text-zinc-600 shrink-0">{i + 1}.</span>
+                  <span>{step}</span>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+          {/* Export button */}
+          <div className="flex items-center gap-3 pt-1">
+            <button
+              onClick={() => exportMutation.mutate(kit)}
+              disabled={exportMutation.isPending}
+              className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-300 hover:bg-zinc-700 disabled:text-zinc-500 border border-zinc-700 transition-colors"
+            >
+              {exportMutation.isPending ? "Exporting…" : "Export to Folder"}
+            </button>
+            {exportMutation.isSuccess && (
+              <p className="text-xs text-zinc-500 font-mono truncate">
+                {exportMutation.data.path}
+              </p>
+            )}
+            {exportMutation.isError && (
+              <p className="text-xs text-red-400">
+                {exportMutation.error.message}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // Idea card
 // =============================================================================
 
@@ -575,6 +726,11 @@ function IdeaCard({
       {/* PR #6 — Scaffold runnable app (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <ScaffoldSection result={result} />
+      )}
+
+      {/* PR #10 — Launch kit (BUILD ideas that have been persisted) */}
+      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+        <LaunchKitSection result={result} />
       )}
     </div>
   );

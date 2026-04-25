@@ -141,6 +141,7 @@ vi.mock("fs/promises", () => ({
   readFile: vi.fn().mockResolvedValue(""),
   rm: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+  mkdir: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/ipc/utils/file_utils", () => ({
@@ -189,6 +190,7 @@ import {
   ANTHROPIC_MODEL_VERSION,
   GOOGLE_MODEL_VERSION,
   getFactoryModelVersion,
+  LAUNCH_KIT_PROMPT,
 } from "@/ipc/handlers/factory_handlers";
 import { DyadErrorKind } from "@/errors/dyad_error";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
@@ -1514,6 +1516,414 @@ describe("factory:scaffold-app", () => {
       .mocked(fsp.writeFile)
       .mock.calls.find((c) => String(c[0]).endsWith("brand.css"));
     expect(brandWrite).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// factory:generate-launch-kit
+// ---------------------------------------------------------------------------
+
+/** Minimal valid LaunchKit JSON string the mock LLM returns. */
+function makeLaunchKitJson(): string {
+  return JSON.stringify({
+    elevatorPitch: "Automate invoices for UAE freelancers in one click.",
+    twitterPost:
+      "Tired of chasing payments? InvoicePro UAE automates it. #freelance #UAE",
+    linkedinPost:
+      "Excited to announce InvoicePro UAE — the fastest invoice tool for UAE freelancers.\n\nNo more chasing late payments. Try it free.",
+    heroHeadline: "Invoices that pay themselves",
+    heroSubtext: "Built for UAE freelancers. Set up in 5 minutes.",
+    emailSubject: "Your invoices just got smarter",
+    emailBody:
+      "Hi [Name],\n\nI wanted to reach out because InvoicePro UAE solves the payment-chasing problem that costs UAE freelancers hours every month.\n\nHere's how it works: you send an invoice, we handle the follow-up.\n\nWould you be open to a quick 15-minute call?\n\nBest, [Founder]",
+    deployChecklist: [
+      "Push the scaffolded app to a new GitHub repository.",
+      "Connect the repository to Vercel via vercel.com/new.",
+      "Set any required environment variables in the Vercel project settings.",
+      "Trigger a production deployment and verify the live URL.",
+      "Share the Vercel URL and collect your first 3 signups.",
+    ],
+  });
+}
+
+/**
+ * Restores db.select to the standard mockDbState-based chain.
+ *
+ * Some earlier tests (factory:list-outcomes) override db.select with a
+ * callCount-based implementation. vi.clearAllMocks() only clears call
+ * history, not the implementation. Call this in a beforeEach for any
+ * describe block that needs the standard mockDbState behaviour.
+ */
+async function restoreDbSelectToMockChain(): Promise<void> {
+  const { db: dbModule } = await import("@/db");
+  vi.mocked(dbModule.select).mockImplementation(() => {
+    const chain: Record<string, unknown> = {
+      from: (..._: unknown[]) => chain,
+      where: (..._: unknown[]) => chain,
+      orderBy: (..._: unknown[]) => chain,
+      set: (..._: unknown[]) => chain,
+      values: (..._: unknown[]) => chain,
+      limit: (..._: unknown[]) => Promise.resolve(mockDbState.rows),
+      returning: (..._: unknown[]) =>
+        Promise.resolve([{ id: mockDbState.insertedId }]),
+      // eslint-disable-next-line unicorn/no-thenable
+      then: (
+        resolve: (v: unknown) => unknown,
+        reject?: (e: unknown) => unknown,
+      ) => Promise.resolve(mockDbState.rows).then(resolve, reject),
+    };
+    return chain as unknown as ReturnType<typeof dbModule.select>;
+  });
+}
+
+describe("factory:generate-launch-kit", () => {
+  beforeEach(restoreDbSelectToMockChain);
+  it("returns a valid LaunchKit from a successful LLM response", async () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    mockDbState.rows = [
+      {
+        id: 1,
+        ideaJson: JSON.stringify({
+          idea: "Invoice automation for Dubai freelancers",
+          name: "InvoicePro UAE",
+          buyer: "Freelancers in UAE",
+          scores: {
+            buyerClarity: 4,
+            painUrgency: 4,
+            marketExistence: 3,
+            differentiation: 3,
+            replaceability: 3,
+            virality: 3,
+            monetisation: 4,
+            buildSimplicity: 4,
+          },
+          totalScore: 28,
+          decision: "BUILD",
+          reason: "Strong",
+          improvedIdea: "",
+          buildPrompt: "Build an invoice SaaS",
+          monetisationAngle: "Monthly subscription",
+          viralTrigger: "Share your invoice",
+          fallbackUsed: false,
+        }),
+        status: "DECIDED",
+        fingerprint: "fp1",
+        createdAt: 1_700_000_000,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash1",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeFakeOpenAIResponse(makeLaunchKitJson())),
+    );
+
+    const handler = capturedHandlers.get("factory:generate-launch-kit")!;
+    const result = (await handler(mockEvent, { runId: 1 })) as {
+      elevatorPitch: string;
+      twitterPost: string;
+      deployChecklist: string[];
+    };
+
+    expect(result.elevatorPitch).toBeTruthy();
+    expect(result.twitterPost.length).toBeLessThanOrEqual(280);
+    expect(Array.isArray(result.deployChecklist)).toBe(true);
+    expect(result.deployChecklist.length).toBeGreaterThan(0);
+  });
+
+  it("throws DyadError(NotFound) when the run does not exist", async () => {
+    mockDbState.rows = [];
+    process.env.OPENAI_API_KEY = "sk-test";
+    const handler = capturedHandlers.get("factory:generate-launch-kit")!;
+    await expect(handler(mockEvent, { runId: 999 })).rejects.toMatchObject({
+      kind: DyadErrorKind.NotFound,
+    });
+  });
+
+  it("throws DyadError(InvalidLlmResponse) when LLM returns invalid JSON", async () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    mockDbState.rows = [
+      {
+        id: 2,
+        ideaJson: JSON.stringify({
+          idea: "test",
+          name: "Test App",
+          buyer: "Buyers",
+          scores: {
+            buyerClarity: 4,
+            painUrgency: 4,
+            marketExistence: 3,
+            differentiation: 3,
+            replaceability: 3,
+            virality: 3,
+            monetisation: 4,
+            buildSimplicity: 4,
+          },
+          totalScore: 28,
+          decision: "BUILD",
+          reason: "ok",
+          improvedIdea: "",
+          buildPrompt: "Build it",
+          monetisationAngle: "sub",
+          viralTrigger: "share",
+          fallbackUsed: false,
+        }),
+        status: "DECIDED",
+        fingerprint: "fp2",
+        createdAt: 1_700_000_001,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash2",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeFakeOpenAIResponse("not valid json")),
+    );
+
+    const handler = capturedHandlers.get("factory:generate-launch-kit")!;
+    await expect(handler(mockEvent, { runId: 2 })).rejects.toMatchObject({
+      kind: DyadErrorKind.InvalidLlmResponse,
+    });
+  });
+
+  it("strips markdown fences before parsing", async () => {
+    process.env.OPENAI_API_KEY = "sk-test";
+    mockDbState.rows = [
+      {
+        id: 3,
+        ideaJson: JSON.stringify({
+          idea: "test",
+          name: "Test App",
+          buyer: "Buyers",
+          scores: {
+            buyerClarity: 4,
+            painUrgency: 4,
+            marketExistence: 3,
+            differentiation: 3,
+            replaceability: 3,
+            virality: 3,
+            monetisation: 4,
+            buildSimplicity: 4,
+          },
+          totalScore: 28,
+          decision: "BUILD",
+          reason: "ok",
+          improvedIdea: "",
+          buildPrompt: "Build it",
+          monetisationAngle: "sub",
+          viralTrigger: "share",
+          fallbackUsed: false,
+        }),
+        status: "DECIDED",
+        fingerprint: "fp3",
+        createdAt: 1_700_000_002,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash3",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    const fencedResponse = "```json\n" + makeLaunchKitJson() + "\n```";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeFakeOpenAIResponse(fencedResponse)),
+    );
+
+    const handler = capturedHandlers.get("factory:generate-launch-kit")!;
+    const result = (await handler(mockEvent, { runId: 3 })) as {
+      elevatorPitch: string;
+    };
+    expect(result.elevatorPitch).toBeTruthy();
+  });
+
+  it("throws DyadError(LaunchKitFailure) wrapping MissingApiKey when no API key is set", async () => {
+    delete process.env.OPENAI_API_KEY;
+    mockDbState.rows = [
+      {
+        id: 4,
+        ideaJson: JSON.stringify({
+          idea: "test",
+          name: "Test App",
+          buyer: "Buyers",
+          scores: {
+            buyerClarity: 4,
+            painUrgency: 4,
+            marketExistence: 3,
+            differentiation: 3,
+            replaceability: 3,
+            virality: 3,
+            monetisation: 4,
+            buildSimplicity: 4,
+          },
+          totalScore: 28,
+          decision: "BUILD",
+          reason: "ok",
+          improvedIdea: "",
+          buildPrompt: "Build it",
+          monetisationAngle: "sub",
+          viralTrigger: "share",
+          fallbackUsed: false,
+        }),
+        status: "DECIDED",
+        fingerprint: "fp4",
+        createdAt: 1_700_000_003,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash4",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    const handler = capturedHandlers.get("factory:generate-launch-kit")!;
+    await expect(handler(mockEvent, { runId: 4 })).rejects.toMatchObject({
+      kind: DyadErrorKind.LaunchKitFailure,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// factory:export-launch-kit
+// ---------------------------------------------------------------------------
+
+describe("factory:export-launch-kit", () => {
+  beforeEach(restoreDbSelectToMockChain);
+  const validKit = {
+    elevatorPitch: "Automate invoices for UAE freelancers.",
+    twitterPost: "Invoice automation for UAE freelancers! #freelance",
+    linkedinPost: "Excited to announce InvoicePro UAE.",
+    heroHeadline: "Invoices that pay themselves",
+    heroSubtext: "Built for UAE freelancers.",
+    emailSubject: "Your invoices just got smarter",
+    emailBody: "Hi [Name], check out InvoicePro UAE.",
+    deployChecklist: ["Push to GitHub.", "Connect to Vercel.", "Deploy."],
+  };
+
+  it("writes launch-kit files and returns the directory path", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.mkdir).mockResolvedValue(undefined as any);
+    vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
+    mockDbState.rows = [
+      {
+        id: 5,
+        ideaJson: JSON.stringify({ name: "InvoicePro UAE" }),
+        status: "DECIDED",
+        fingerprint: "fp5",
+        createdAt: 1_700_000_004,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash5",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    const handler = capturedHandlers.get("factory:export-launch-kit")!;
+    const result = (await handler(mockEvent, { runId: 5, kit: validKit })) as {
+      path: string;
+    };
+
+    // Path should be under factory-apps/<slug>/launch-kit
+    expect(result.path).toContain("launch-kit");
+    expect(result.path).toContain("invoicepro-uae");
+
+    // mkdir should have been called once (recursive)
+    expect(vi.mocked(fsp.mkdir)).toHaveBeenCalled();
+
+    // writeFile should have been called 6 times (one per kit file)
+    const kitWrites = vi
+      .mocked(fsp.writeFile)
+      .mock.calls.filter((c) => String(c[0]).includes("launch-kit"));
+    expect(kitWrites.length).toBe(6);
+
+    // elevator-pitch.md should contain the pitch text
+    const pitchWrite = kitWrites.find((c) =>
+      String(c[0]).endsWith("elevator-pitch.md"),
+    );
+    expect(pitchWrite).toBeDefined();
+    expect(String(pitchWrite![1])).toContain(validKit.elevatorPitch);
+
+    // deploy-checklist.md should contain numbered steps
+    const checklistWrite = kitWrites.find((c) =>
+      String(c[0]).endsWith("deploy-checklist.md"),
+    );
+    expect(checklistWrite).toBeDefined();
+    expect(String(checklistWrite![1])).toContain("1. Push to GitHub.");
+  });
+
+  it("throws DyadError(NotFound) when the run does not exist", async () => {
+    mockDbState.rows = [];
+    const handler = capturedHandlers.get("factory:export-launch-kit")!;
+    await expect(
+      handler(mockEvent, { runId: 999, kit: validKit }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.NotFound });
+  });
+
+  it("uses a fallback slug when idea name is missing", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.mkdir).mockResolvedValue(undefined as any);
+    vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
+    mockDbState.rows = [
+      {
+        id: 6,
+        ideaJson: JSON.stringify({}), // no "name" field
+        status: "DECIDED",
+        fingerprint: "fp6",
+        createdAt: 1_700_000_005,
+        launchOutcome: null,
+        promptVersion: "v3.2",
+        promptHash: "hash6",
+        modelVersion: "gpt-4o-mini-2024-07-18",
+      },
+    ];
+
+    const handler = capturedHandlers.get("factory:export-launch-kit")!;
+    const result = (await handler(mockEvent, { runId: 6, kit: validKit })) as {
+      path: string;
+    };
+    // Fallback slug should include the runId
+    expect(result.path).toContain("run-6");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LAUNCH_KIT_PROMPT helper
+// ---------------------------------------------------------------------------
+
+describe("LAUNCH_KIT_PROMPT", () => {
+  it("includes the idea name and buyer in the prompt", () => {
+    const idea = {
+      idea: "Invoice automation for Dubai freelancers",
+      name: "InvoicePro UAE",
+      buyer: "Freelancers in UAE",
+      scores: {
+        buyerClarity: 4,
+        painUrgency: 4,
+        marketExistence: 3,
+        differentiation: 3,
+        replaceability: 3,
+        virality: 3,
+        monetisation: 4,
+        buildSimplicity: 4,
+      },
+      totalScore: 28,
+      decision: "BUILD" as const,
+      reason: "ok",
+      improvedIdea: "",
+      buildPrompt: "Build an invoice SaaS",
+      monetisationAngle: "Monthly subscription",
+      viralTrigger: "Share invoice",
+      fallbackUsed: false,
+    };
+    const prompt = LAUNCH_KIT_PROMPT(idea);
+    expect(prompt).toContain("InvoicePro UAE");
+    expect(prompt).toContain("Freelancers in UAE");
+    expect(prompt).toContain("deployChecklist");
   });
 });
 

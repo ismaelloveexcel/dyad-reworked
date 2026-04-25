@@ -170,3 +170,33 @@ The scaffold template (`scaffold/`) ships a brand design system that the scaffol
 - OpenAI API key is read from `process.env.OPENAI_API_KEY` in the main process. Never pass it to the renderer.
 - `safeParseLlmJson` strips markdown fences and limits parse attempts to prevent DoS via large payloads.
 - All user-supplied `idea` strings are truncated to 2000 chars before being sent to the prompt.
+
+---
+
+## Launch Kit Generator (PR #10)
+
+Generates structured launch assets (elevator pitch, social posts, landing-page copy, cold-email body, deploy checklist) for a BUILD idea that has been persisted to the database.
+
+### IPC surface
+
+| Channel                     | Input                               | Output                          |
+| --------------------------- | ----------------------------------- | ------------------------------- |
+| `factory:generate-launch-kit` | `{ runId: number }`               | `LaunchKit`                     |
+| `factory:export-launch-kit`  | `{ runId: number; kit: LaunchKit }` | `{ path: string }`              |
+
+`LaunchKit` is defined in `src/ipc/types/factory.ts` (`LaunchKitSchema`).  
+`factory:export-launch-kit` writes Markdown files to `userData/factory-apps/<slug>/launch-kit/` and returns the directory path.
+
+### Error handling
+
+- `DyadErrorKind.LaunchKitFailure` (`"launch_kit_failure"`) — thrown when the LLM call itself fails. Filtered from PostHog telemetry.
+- `DyadErrorKind.InvalidLlmResponse` — thrown when the LLM response cannot be parsed as valid JSON or fails schema validation.
+- `DyadErrorKind.NotFound` — thrown when the requested `runId` does not exist in `factory_runs`.
+
+### UI integration
+
+`LaunchKitSection` in `src/pages/factory.tsx` is rendered inside `IdeaCard` for BUILD ideas that have a `runId > 0`.  It uses `useMutation` (not `useQuery`) because generation is an explicit user action.
+
+### Mock-isolation note for tests
+
+The `factory:list-outcomes` tests override `db.select` with a `callCount`-based implementation via `vi.mocked(db.select).mockImplementation(...)`. Because `vi.clearAllMocks()` only resets call history (not the implementation), subsequent test suites that need the standard `mockDbState`-based chain must restore it in a nested `beforeEach` — see `describe("factory:generate-launch-kit")` in `factory_handlers.test.ts`.
