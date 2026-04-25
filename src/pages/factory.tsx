@@ -1,9 +1,11 @@
 import { useState, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   type IdeaEvaluationResult,
   type PatternEntry,
   type GeneratePortfolioResponse,
   type RunStatus,
+  factoryClient,
 } from "@/ipc/types/factory";
 import {
   type PipelineStatus,
@@ -18,6 +20,7 @@ import {
 } from "@/core/factory/storage";
 import { extractPatterns } from "@/core/factory/patterns";
 import { useFactoryRun } from "@/hooks/useFactoryRun";
+import { queryKeys } from "@/lib/queryKeys";
 
 // Re-export types used by external test files so imports from this module
 // continue to work after the business logic was extracted to @/core/factory.
@@ -67,6 +70,86 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
       <span className={`text-xs font-mono w-4 text-right ${scoreColor(value)}`}>
         {value}
       </span>
+    </div>
+  );
+}
+
+// =============================================================================
+// PR #5 — Outcomes section (read-only) — shown inside IdeaCard when the run
+// has been persisted and quantitative (or legacy) outcome data exists.
+// =============================================================================
+
+function OutcomesSection({ runId }: { runId: number }) {
+  const query = useQuery({
+    queryKey: queryKeys.factory.outcomes(runId),
+    queryFn: () => factoryClient.listOutcomes({ runId }),
+    enabled: runId > 0,
+  });
+
+  if (query.isLoading) {
+    return (
+      <div className="text-xs text-zinc-600 italic">Loading outcomes…</div>
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <div className="text-xs text-red-400 italic">
+        Failed to load outcomes.
+      </div>
+    );
+  }
+
+  const outcomes = query.data?.outcomes ?? [];
+  if (outcomes.length === 0) return null;
+
+  const fmt = (n: number | null) =>
+    n == null ? <span className="text-zinc-600">—</span> : n.toLocaleString();
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
+      <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+        Launch Outcomes
+      </p>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-zinc-700">
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Revenue (USD¢)</th>
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Conversions</th>
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Views</th>
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Churn 30d</th>
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Source</th>
+              <th className="text-left py-1.5 text-zinc-500 font-medium">Captured</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-800">
+            {outcomes.map((o) => (
+              <tr key={o.id}>
+                <td className="py-1.5 pr-4 text-zinc-200">{fmt(o.revenueUsd)}</td>
+                <td className="py-1.5 pr-4 text-zinc-200">{fmt(o.conversions)}</td>
+                <td className="py-1.5 pr-4 text-zinc-200">{fmt(o.views)}</td>
+                <td className="py-1.5 pr-4 text-zinc-200">{fmt(o.churn30d)}</td>
+                <td className="py-1.5 pr-4 text-zinc-400">
+                  {o.source ?? <span className="text-zinc-600">—</span>}
+                </td>
+                <td className="py-1.5 text-zinc-500">
+                  {new Date(o.capturedAt * 1000).toLocaleDateString("en-GB", {
+                    day: "numeric",
+                    month: "short",
+                    year: "numeric",
+                  })}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {outcomes.some((o) => o.source === "legacy") && (
+        <p className="text-xs text-zinc-600 italic">
+          ✦ Row migrated from legacy boolean outcome — exact values unknown.
+        </p>
+      )}
     </div>
   );
 }
@@ -326,6 +409,11 @@ function IdeaCard({
             )}
           </div>
         )}
+
+      {/* PR #5 — Quantitative outcomes (read-only) */}
+      {result.runId != null && result.runId > 0 && (
+        <OutcomesSection runId={result.runId} />
+      )}
     </div>
   );
 }

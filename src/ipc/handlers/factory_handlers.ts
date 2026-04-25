@@ -3,10 +3,12 @@ import {
   factoryContracts,
   type IdeaEvaluationResult,
   type RunStatus,
+  type LaunchOutcome,
+  type QuantitativeLaunchOutcome,
 } from "../types/factory";
 import { DyadError, DyadErrorKind } from "@/errors/dyad_error";
 import { db } from "@/db";
-import { factoryRuns } from "@/db/schema";
+import { factoryRuns, launchOutcomes } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import log from "electron-log";
 import { dialog, BrowserWindow } from "electron";
@@ -543,4 +545,114 @@ export function registerFactoryHandlers() {
       modelVersion: OPENAI_MODEL_VERSION,
     };
   });
+
+  // ===========================================================================
+  // PR #5 — outcomes:list — read quantitative outcomes for a run.
+  // Falls back to mapping the legacy boolean launchOutcome blob when the new
+  // table has no rows yet (backwards-compat).
+  // ===========================================================================
+
+  createTypedHandler(factoryContracts.listOutcomes, async (_, { runId }) => {
+    try {
+      const rows = await db
+        .select()
+        .from(launchOutcomes)
+        .where(eq(launchOutcomes.runId, runId))
+        .orderBy(desc(launchOutcomes.capturedAt));
+
+      if (rows.length > 0) {
+        const outcomes: QuantitativeLaunchOutcome[] = rows.map((r) => ({
+          id: r.id,
+          runId: r.runId,
+          revenueUsd: r.revenueUsd ?? null,
+          conversions: r.conversions ?? null,
+          views: r.views ?? null,
+          churn30d: r.churn30d ?? null,
+          source: r.source ?? null,
+          capturedAt:
+            r.capturedAt instanceof Date
+              ? Math.floor(r.capturedAt.getTime() / 1000)
+              : (r.capturedAt as number),
+        }));
+        return { outcomes };
+      }
+
+      // Backwards-compat: map legacy boolean row from factory_runs.launch_outcome
+      const runRows = await db
+        .select({
+          id: factoryRuns.id,
+          launchOutcome: factoryRuns.launchOutcome,
+          createdAt: factoryRuns.createdAt,
+        })
+        .from(factoryRuns)
+        .where(eq(factoryRuns.id, runId))
+        .limit(1);
+
+      if (runRows.length === 0) return { outcomes: [] };
+
+      const raw = runRows[0].launchOutcome;
+      if (!raw) return { outcomes: [] };
+
+      const legacy = mapLegacyLaunchOutcome(runId, raw, runRows[0].createdAt);
+      return { outcomes: legacy ? [legacy] : [] };
+    } catch (err) {
+      throw new DyadError(
+        `Failed to list outcomes for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+        DyadErrorKind.FactoryPersistenceFailure,
+      );
+    }
+  });
+}
+
+// =============================================================================
+// PR #5 — Backwards-compat reader
+// Maps a legacy { launched, revenueGenerated, notes } blob to a synthetic
+// QuantitativeLaunchOutcome with id=-1 (not persisted) so the renderer can
+// render it uniformly.
+// =============================================================================
+
+function isLegacyLaunchOutcome(value: unknown): value is LaunchOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.launched === "boolean" &&
+    typeof candidate.revenueGenerated === "boolean"
+  );
+}
+
+function mapLegacyLaunchOutcome(
+  runId: number,
+  raw: string,
+  createdAt: Date | number | null,
+): QuantitativeLaunchOutcome | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isLegacyLaunchOutcome(parsed)) {
+    return null;
+  }
+  // Treat revenueGenerated=true as a non-zero revenue signal (value=1 cent is a
+  // placeholder signal only — exact amount is unknown for legacy rows) and
+  // launched=true as conversions >= 1.
+  const capturedAtSec =
+    createdAt instanceof Date
+      ? Math.floor(createdAt.getTime() / 1000)
+      : typeof createdAt === "number"
+        ? createdAt
+        : Math.floor(Date.now() / 1000);
+  return {
+    id: -1,
+    runId,
+    revenueUsd: parsed.revenueGenerated ? 1 : null,
+    conversions: parsed.launched ? 1 : null,
+    views: null,
+    churn30d: null,
+    source: "legacy",
+    capturedAt: capturedAtSec,
+  };
 }

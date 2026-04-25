@@ -78,6 +78,26 @@ export const LaunchOutcomeSchema = z.object({
 export type LaunchOutcome = z.infer<typeof LaunchOutcomeSchema>;
 
 // =============================================================================
+// PR #5 — Quantitative Launch Outcome
+// Replaces the boolean LaunchOutcome for new reads; old rows are mapped via
+// mapLegacyLaunchOutcome() in the backend.
+// =============================================================================
+
+export const QuantitativeLaunchOutcomeSchema = z.object({
+  id: z.number(),
+  runId: z.number(),
+  revenueUsd: z.number().nullable(), // USD cents; null = unknown
+  conversions: z.number().nullable(),
+  views: z.number().nullable(),
+  churn30d: z.number().nullable(),
+  source: z.string().nullable(), // "manual" | "stripe" | "analytics" | …
+  capturedAt: z.number(), // unix seconds
+});
+export type QuantitativeLaunchOutcome = z.infer<
+  typeof QuantitativeLaunchOutcomeSchema
+>;
+
+// =============================================================================
 // Full Idea Evaluation Result
 // =============================================================================
 
@@ -237,6 +257,14 @@ export const factoryContracts = {
     output: z.object({
       openaiKeyPresent: z.boolean(),
       modelVersion: z.string(),
+    }),
+  }),
+  // PR #5 — Read quantitative outcomes for a run (no ingest yet)
+  listOutcomes: defineContract({
+    channel: "factory:list-outcomes",
+    input: z.object({ runId: z.number() }),
+    output: z.object({
+      outcomes: z.array(QuantitativeLaunchOutcomeSchema),
     }),
   }),
 } as const;

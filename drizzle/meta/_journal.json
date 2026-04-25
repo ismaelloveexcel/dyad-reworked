@@ -225,6 +225,13 @@
       "when": 1777083402924,
       "tag": "0031_yellow_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "6",
+      "when": 1777200000000,
+      "tag": "0032_launch_outcomes",
+      "breakpoints": true
     }
   ]
 }

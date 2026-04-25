@@ -70,6 +70,16 @@ vi.mock("@/db/schema", () => ({
     promptHash: "promptHash",
     modelVersion: "modelVersion",
   },
+  launchOutcomes: {
+    id: "id",
+    runId: "runId",
+    revenueUsd: "revenueUsd",
+    conversions: "conversions",
+    views: "views",
+    churn30d: "churn30d",
+    source: "source",
+    capturedAt: "capturedAt",
+  },
 }));
 
 vi.mock("@/ipc/handlers/base", () => ({
@@ -786,5 +796,216 @@ describe("factory:export-runs", () => {
       success: boolean;
     };
     expect(result.success).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// factory:list-outcomes (PR #5)
+// ---------------------------------------------------------------------------
+
+describe("factory:list-outcomes", () => {
+  it("returns quantitative rows from launch_outcomes when they exist", async () => {
+    // The mock DB chain returns mockDbState.rows on first select call (launch_outcomes).
+    mockDbState.rows = [
+      {
+        id: 1,
+        runId: 42,
+        revenueUsd: 5000,
+        conversions: 3,
+        views: 200,
+        churn30d: null,
+        source: "manual",
+        capturedAt: 1700000000,
+      },
+    ];
+    const handler = capturedHandlers.get("factory:list-outcomes")!;
+    const result = (await handler(mockEvent, { runId: 42 })) as {
+      outcomes: {
+        id: number;
+        runId: number;
+        revenueUsd: number | null;
+        conversions: number | null;
+        views: number | null;
+        source: string | null;
+        capturedAt: number;
+      }[];
+    };
+    expect(result.outcomes).toHaveLength(1);
+    expect(result.outcomes[0].revenueUsd).toBe(5000);
+    expect(result.outcomes[0].conversions).toBe(3);
+    expect(result.outcomes[0].source).toBe("manual");
+    expect(result.outcomes[0].capturedAt).toBe(1700000000);
+  });
+
+  it("falls back to legacy mapping when launch_outcomes is empty and run has a launchOutcome blob", async () => {
+    // First select (launch_outcomes table) returns [] — no quantitative rows.
+    // Second select (factory_runs fallback) returns a run with a legacy blob.
+    let callCount = 0;
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockImplementation(() => {
+      callCount++;
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      if (callCount === 1) {
+        // launch_outcomes query → empty
+        return makeChain([]) as any;
+      }
+      // factory_runs fallback query
+      return makeChain([
+        {
+          id: 42,
+          launchOutcome: JSON.stringify({
+            launched: true,
+            revenueGenerated: true,
+            notes: "First sale!",
+          }),
+          createdAt: 1700000000,
+        },
+      ]) as any;
+    });
+
+    const handler = capturedHandlers.get("factory:list-outcomes")!;
+    const result = (await handler(mockEvent, { runId: 42 })) as {
+      outcomes: {
+        id: number;
+        source: string | null;
+        revenueUsd: number | null;
+        conversions: number | null;
+      }[];
+    };
+    expect(result.outcomes).toHaveLength(1);
+    expect(result.outcomes[0].source).toBe("legacy");
+    expect(result.outcomes[0].revenueUsd).toBe(1);
+    expect(result.outcomes[0].conversions).toBe(1);
+    expect(result.outcomes[0].id).toBe(-1);
+  });
+
+  it("returns empty outcomes when run has no launchOutcome blob", async () => {
+    let callCount = 0;
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockImplementation(() => {
+      callCount++;
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      if (callCount === 1) return makeChain([]) as any;
+      return makeChain([
+        { id: 7, launchOutcome: null, createdAt: 1700000000 },
+      ]) as any;
+    });
+
+    const handler = capturedHandlers.get("factory:list-outcomes")!;
+    const result = (await handler(mockEvent, { runId: 7 })) as {
+      outcomes: unknown[];
+    };
+    expect(result.outcomes).toHaveLength(0);
+  });
+
+  it("returns empty outcomes when the legacy blob is corrupt JSON", async () => {
+    let callCount = 0;
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockImplementation(() => {
+      callCount++;
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      if (callCount === 1) return makeChain([]) as any;
+      return makeChain([
+        { id: 8, launchOutcome: "{{not json}}", createdAt: 1700000000 },
+      ]) as any;
+    });
+
+    const handler = capturedHandlers.get("factory:list-outcomes")!;
+    const result = (await handler(mockEvent, { runId: 8 })) as {
+      outcomes: unknown[];
+    };
+    expect(result.outcomes).toHaveLength(0);
+  });
+
+  it("returns empty outcomes when the legacy blob parses to null (corrupt value)", async () => {
+    let callCount = 0;
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockImplementation(() => {
+      callCount++;
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      if (callCount === 1) return makeChain([]) as any;
+      // "null" is valid JSON but fails the type guard (not an object)
+      return makeChain([
+        { id: 9, launchOutcome: "null", createdAt: 1700000000 },
+      ]) as any;
+    });
+
+    const handler = capturedHandlers.get("factory:list-outcomes")!;
+    const result = (await handler(mockEvent, { runId: 9 })) as {
+      outcomes: unknown[];
+    };
+    expect(result.outcomes).toHaveLength(0);
   });
 });
