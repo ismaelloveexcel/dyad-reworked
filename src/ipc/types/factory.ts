@@ -107,6 +107,7 @@ export const IdeaEvaluationResultSchema = z.object({
   launchOutcome: LaunchOutcomeSchema.optional(),
   promptVersion: z.string().optional(),
   promptHash: z.string().optional(),
+  modelVersion: z.string().optional(), // PR #1 — pinned OpenAI model snapshot used for this run
   evaluatedAt: z.number().optional(), // unix ms — injected from createdAt DB column
 });
 
@@ -226,6 +227,15 @@ export const factoryContracts = {
     channel: "factory:update-launch-outcome",
     input: z.object({ id: z.number(), outcome: LaunchOutcomeSchema }),
     output: z.object({ success: z.boolean() }),
+  }),
+  // PR #1 — Surface missing OpenAI key to renderer for the global banner
+  getSystemStatus: defineContract({
+    channel: "factory:get-system-status",
+    input: z.object({}),
+    output: z.object({
+      openaiKeyPresent: z.boolean(),
+      modelVersion: z.string(),
+    }),
   }),
 } as const;
 

@@ -60,6 +60,17 @@ const logger = log.scope("main");
 // Load environment variables from .env file
 dotenv.config();
 
+// PR #1 — Surface missing OPENAI_API_KEY at startup. Previously the Factory
+// pipeline silently substituted a fixed UAE-themed fallback portfolio; now
+// the renderer reads `factory:get-system-status` and shows a banner. We also
+// log a single warn-level line at startup so packaged builds make this
+// visible in the rotating log without spamming on every IPC call.
+if (!process.env.OPENAI_API_KEY || process.env.OPENAI_API_KEY.trim() === "") {
+  logger.warn(
+    "OPENAI_API_KEY is not set — Factory features will be disabled until it is configured.",
+  );
+}
+
 // Register IPC handlers before app is ready
 registerIpcHandlers();
 

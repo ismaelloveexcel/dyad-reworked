@@ -1611,6 +1611,11 @@ export default function FactoryPage() {
     id: number;
     existing: IdeaEvaluationResult;
   } | null>(null);
+  // PR #1 — Global system status (OpenAI key presence + pinned model snapshot)
+  const [systemStatus, setSystemStatus] = useState<{
+    openaiKeyPresent: boolean;
+    modelVersion: string;
+  } | null>(null);
 
   // Load history from DB on mount; migrate legacy localStorage data once
   useEffect(() => {
@@ -1635,6 +1640,12 @@ export default function FactoryPage() {
     factoryClient
       .listRuns({})
       .then(({ runs }) => setHistory(runs))
+      .catch(() => {});
+
+    // PR #1 — Probe system status so we can show the missing-key banner
+    factoryClient
+      .getSystemStatus({})
+      .then(setSystemStatus)
       .catch(() => {});
   }, []);
 
@@ -1749,6 +1760,29 @@ export default function FactoryPage() {
             Dual-engine idea factory — generates, filters, and learns what works.
           </p>
         </div>
+
+        {/* PR #1 — Missing OPENAI_API_KEY banner. Renderer-side, but the
+            authoritative source is the main process which reads dotenv at
+            startup; see registerFactoryHandlers' getSystemStatus handler. */}
+        {systemStatus && !systemStatus.openaiKeyPresent && (
+          <div
+            role="alert"
+            data-testid="factory-missing-key-banner"
+            className="rounded-xl border border-red-800 bg-red-950/30 p-4 space-y-1"
+          >
+            <p className="text-xs text-red-400 font-medium uppercase tracking-wider">
+              OpenAI API key missing
+            </p>
+            <p className="text-sm text-red-200">
+              Set <code className="px-1 py-0.5 rounded bg-red-900/40">OPENAI_API_KEY</code>{" "}
+              in your <code className="px-1 py-0.5 rounded bg-red-900/40">.env</code> file
+              (or shell environment) and restart the app. Until then, Factory
+              evaluation, idea generation, and portfolio generation will fail
+              with a clear error rather than silently substituting placeholder
+              data.
+            </p>
+          </div>
+        )}
 
         {/* E1 — Duplicate warning banner */}
         {duplicateWarning && (

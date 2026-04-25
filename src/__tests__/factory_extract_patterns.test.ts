@@ -53,9 +53,9 @@ describe("extractPatterns — operator-precedence regression", () => {
     // Schema says `revenue: string | undefined`. Before the fix this was the
     // number `1`. After the fix it is the string "1" so it both satisfies the
     // type and remains numerically truthy for downstream `> 0` checks.
-    expect(typeof entry.revenue === "string" || entry.revenue === undefined).toBe(
-      true,
-    );
+    expect(
+      typeof entry.revenue === "string" || entry.revenue === undefined,
+    ).toBe(true);
     expect(entry.revenue).toBe("1");
   });
 
