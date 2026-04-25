@@ -377,6 +377,40 @@ export const factoryContracts = {
     input: z.object({ token: z.string() }),
     output: z.void(),
   }),
+  // PR #12 — Save LemonSqueezy API key to encrypted settings.
+  saveLemonSqueezyKey: defineContract({
+    channel: "factory:save-lemonsqueezy-key",
+    input: z.object({ key: z.string() }),
+    output: z.void(),
+  }),
+  // PR #12 — Save Stripe secret key to encrypted settings.
+  saveStripeKey: defineContract({
+    channel: "factory:save-stripe-key",
+    input: z.object({ key: z.string() }),
+    output: z.void(),
+  }),
+  // PR #12 — Ingest payment data from LemonSqueezy or Stripe into launch_outcomes.
+  // Fetches paid orders/charges, optionally filtered by product name and start date,
+  // then upserts a single aggregated launch_outcomes row for the given run.
+  ingestPayments: defineContract({
+    channel: "factory:ingest-payments",
+    input: z.object({
+      runId: z.number().int().positive(),
+      provider: z.enum(["lemonsqueezy", "stripe"]),
+      /** Optional substring match against product/order name to narrow results. */
+      productName: z.string().optional(),
+      /** Only include orders/charges at or after this unix timestamp (seconds). */
+      fromTimestamp: z.number().int().optional(),
+    }),
+    output: z.object({
+      /** Number of launch_outcomes rows inserted (0 if no matching orders found). */
+      inserted: z.number(),
+      /** Total revenue in USD cents aggregated from matched orders/charges. */
+      revenueUsdCents: z.number(),
+      /** Number of matched orders / successful charges (conversions). */
+      conversions: z.number(),
+    }),
+  }),
 } as const;
 
 // =============================================================================

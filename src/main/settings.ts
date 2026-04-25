@@ -167,6 +167,20 @@ export function readSettings(): UserSettings {
         encryptionType,
       };
     }
+    if (combinedSettings.lemonSqueezyApiKey) {
+      const encryptionType = combinedSettings.lemonSqueezyApiKey.encryptionType;
+      combinedSettings.lemonSqueezyApiKey = {
+        value: decrypt(combinedSettings.lemonSqueezyApiKey),
+        encryptionType,
+      };
+    }
+    if (combinedSettings.stripeSecretKey) {
+      const encryptionType = combinedSettings.stripeSecretKey.encryptionType;
+      combinedSettings.stripeSecretKey = {
+        value: decrypt(combinedSettings.stripeSecretKey),
+        encryptionType,
+      };
+    }
     for (const provider in combinedSettings.providerSettings) {
       if (combinedSettings.providerSettings[provider].apiKey) {
         const encryptionType =
@@ -245,6 +259,14 @@ export function writeSettings(settings: Partial<UserSettings>): void {
       newSettings.netlifyAccessToken = encrypt(
         newSettings.netlifyAccessToken.value,
       );
+    }
+    if (newSettings.lemonSqueezyApiKey) {
+      newSettings.lemonSqueezyApiKey = encrypt(
+        newSettings.lemonSqueezyApiKey.value,
+      );
+    }
+    if (newSettings.stripeSecretKey) {
+      newSettings.stripeSecretKey = encrypt(newSettings.stripeSecretKey.value);
     }
     if (newSettings.supabase) {
       // Encrypt legacy tokens (kept for backwards compat)

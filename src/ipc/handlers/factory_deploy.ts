@@ -127,7 +127,10 @@ async function runWithConcurrency<T>(
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
+  const workers = Array.from(
+    { length: Math.min(concurrency, tasks.length) },
+    worker,
+  );
   await Promise.all(workers);
   return results;
 }
@@ -353,9 +356,12 @@ async function deployToNetlify(
     } else {
       // Name may already be taken (e.g. previous deploy attempt failed after
       // site creation). Attempt to look it up and reuse.
-      const createErrorBody = await siteResponse.text().catch(() => "(no body)");
+      const createErrorBody = await siteResponse
+        .text()
+        .catch(() => "(no body)");
 
-      const { signal: listSignal, clear: listClear } = withTimeout(DEPLOY_TIMEOUT_MS);
+      const { signal: listSignal, clear: listClear } =
+        withTimeout(DEPLOY_TIMEOUT_MS);
       let listResponse: Response;
       try {
         listResponse = await fetch(`${NETLIFY_API_BASE}/sites`, {
@@ -367,7 +373,9 @@ async function deployToNetlify(
       }
 
       if (!listResponse.ok) {
-        const listErrorBody = await listResponse.text().catch(() => "(no body)");
+        const listErrorBody = await listResponse
+          .text()
+          .catch(() => "(no body)");
         throw new DyadError(
           `Failed to create Netlify site: ${siteResponse.status} ${createErrorBody}. Failed to list existing sites: ${listResponse.status} ${listErrorBody}`,
           DyadErrorKind.DeployFailure,
