@@ -189,7 +189,8 @@ Generates structured launch assets (elevator pitch, social posts, landing-page c
 
 ### Error handling
 
-- `DyadErrorKind.LaunchKitFailure` (`"launch_kit_failure"`) — thrown when the LLM call fails or JSON parsing fails.  Filtered from PostHog telemetry.
+- `DyadErrorKind.LaunchKitFailure` (`"launch_kit_failure"`) — thrown when the LLM call itself fails. Filtered from PostHog telemetry.
+- `DyadErrorKind.InvalidLlmResponse` — thrown when the LLM response cannot be parsed as valid JSON or fails schema validation.
 - `DyadErrorKind.NotFound` — thrown when the requested `runId` does not exist in `factory_runs`.
 
 ### UI integration
