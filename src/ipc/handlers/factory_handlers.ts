@@ -624,6 +624,17 @@ export function registerFactoryHandlers() {
         logger.log(`[scaffoldApp] ${msg}`);
       };
 
+      // Escape HTML special characters for use in HTML attributes and text content
+      const escapeHtml = (str: string): string =>
+        str.replace(
+          /[<>&"]/g,
+          (c) =>
+            c === "<" ? "&lt;"
+            : c === ">" ? "&gt;"
+            : c === "&" ? "&amp;"
+            : "&quot;",
+        );
+
       // Derive a filesystem-safe slug from the app name
       const slug = appName
         .toLowerCase()
@@ -662,15 +673,9 @@ export function registerFactoryHandlers() {
         // 2. index.html — replace the default <title>
         const htmlPath = path.join(destDir, "index.html");
         const htmlContent = await readFile(htmlPath, "utf-8");
-        const safeAppName = appName.replace(/[<>&"]/g, (c) =>
-          c === "<" ? "&lt;"
-          : c === ">" ? "&gt;"
-          : c === "&" ? "&amp;"
-          : "&quot;",
-        );
         const updatedHtml = htmlContent.replace(
           /<title>[^<]*<\/title>/,
-          `<title>${safeAppName}</title>`,
+          `<title>${escapeHtml(appName)}</title>`,
         );
         await writeFile(htmlPath, updatedHtml, "utf-8");
         pushLog("Patched index.html title.");
@@ -679,25 +684,10 @@ export function registerFactoryHandlers() {
         const indexTsxPath = path.join(destDir, "src", "pages", "Index.tsx");
         const indexTsx = await readFile(indexTsxPath, "utf-8");
         const patchedIndexTsx = indexTsx
-          .replace(
-            /Welcome to Your Blank App/g,
-            appName.replace(/[<>&"]/g, (c) =>
-              c === "<" ? "&lt;"
-              : c === ">" ? "&gt;"
-              : c === "&" ? "&amp;"
-              : "&quot;",
-            ),
-          )
+          .replace(/Welcome to Your Blank App/g, escapeHtml(appName))
           .replace(
             /Start building your amazing project here!/g,
-            tagline
-              ? tagline.replace(/[<>&"]/g, (c) =>
-                  c === "<" ? "&lt;"
-                  : c === ">" ? "&gt;"
-                  : c === "&" ? "&amp;"
-                  : "&quot;",
-                )
-              : "Built with Dyad.",
+            tagline ? escapeHtml(tagline) : "Built with Dyad.",
           );
         await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
         pushLog("Patched src/pages/Index.tsx content.");

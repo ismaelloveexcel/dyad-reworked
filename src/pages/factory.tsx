@@ -168,6 +168,7 @@ function ScaffoldSection({
   const runId = result.runId;
 
   const scaffoldMutation = useMutation({
+    mutationKey: queryKeys.factory.scaffold(runId ?? 0),
     mutationFn: () =>
       factoryClient.scaffoldApp({
         runId: runId!,
