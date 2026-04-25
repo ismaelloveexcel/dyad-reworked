@@ -9,7 +9,7 @@ import {
 import { DyadError, DyadErrorKind } from "@/errors/dyad_error";
 import { db } from "@/db";
 import { factoryRuns, launchOutcomes } from "@/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, isNotNull } from "drizzle-orm";
 import log from "electron-log";
 import { app, dialog, BrowserWindow } from "electron";
 import { writeFile, readFile, stat, rm } from "fs/promises";
@@ -26,7 +26,6 @@ import {
 import { buildBrandCss } from "./factory_brand";
 import {
   cosineSimilarity,
-  computeNoveltyScore,
   serializeEmbedding,
   deserializeEmbedding,
 } from "@/core/factory/embeddings";
@@ -605,7 +604,7 @@ export function registerFactoryHandlers() {
           const ideaText = `${idea.name} — ${idea.buyer} — ${idea.idea}`;
           embeddingVec = await fetchEmbedding(ideaText);
 
-          // Load all stored embeddings for similarity comparison
+          // Load only rows that already have an embedding (skip empty columns).
           const storedRows = await db
             .select({
               id: factoryRuns.id,
@@ -613,22 +612,26 @@ export function registerFactoryHandlers() {
               ideaJson: factoryRuns.ideaJson,
               status: factoryRuns.status,
             })
-            .from(factoryRuns);
+            .from(factoryRuns)
+            .where(isNotNull(factoryRuns.embedding));
 
-          const storedVecs: number[][] = [];
+          let maxSimilarity = 0;
           let semanticDuplicate: {
             id: number;
             idea: IdeaEvaluationResult;
             similarity: number;
+            // DB status column — authoritative for runStatus
+            dbStatus: string | null;
           } | null = null;
 
           for (const row of storedRows) {
-            if (!row.embedding) continue;
-            const vec = deserializeEmbedding(row.embedding);
+            // embedding is guaranteed non-null by SQL filter, but be defensive
+            const vec = deserializeEmbedding(row.embedding!);
             if (vec.length === 0) continue;
-            storedVecs.push(vec);
 
             const sim = cosineSimilarity(embeddingVec, vec);
+            // Track the global maximum similarity to compute noveltyScore
+            if (sim > maxSimilarity) maxSimilarity = sim;
             if (
               sim >= similarityThreshold &&
               (semanticDuplicate === null || sim > semanticDuplicate.similarity)
@@ -641,6 +644,7 @@ export function registerFactoryHandlers() {
                   id: row.id,
                   idea: parsedIdea,
                   similarity: sim,
+                  dbStatus: row.status,
                 };
               } catch {
                 // ignore corrupt rows
@@ -648,7 +652,8 @@ export function registerFactoryHandlers() {
             }
           }
 
-          noveltyScore = computeNoveltyScore(embeddingVec, storedVecs);
+          // noveltyScore = 1 - max cosine similarity (no second pass needed)
+          noveltyScore = Math.max(0, 1 - maxSimilarity);
 
           if (semanticDuplicate !== null) {
             // Soft duplicate found via semantic similarity — return without inserting
@@ -660,18 +665,28 @@ export function registerFactoryHandlers() {
               duplicate: {
                 ...semanticDuplicate.idea,
                 runId: semanticDuplicate.id,
+                // Use the DB status column — ideaJson may not contain runStatus
                 runStatus:
-                  (semanticDuplicate.idea.runStatus as RunStatus) ?? "DECIDED",
+                  (semanticDuplicate.dbStatus as RunStatus) ?? "DECIDED",
               },
             };
           }
         } catch (embErr) {
-          // Embedding failures are non-fatal — log and fall through without
-          // novelty score or semantic dedup so ideas can still be saved.
-          logger.warn(
-            "[factory] embedding fetch failed, skipping novelty/dedup:",
-            embErr,
-          );
+          // Embedding failures are non-fatal — fall through without novelty score
+          // or semantic dedup so ideas can still be saved.
+          // MissingApiKey is an expected configuration state when the user hasn't
+          // set OPENAI_API_KEY; suppress the warning to avoid log noise.
+          if (
+            embErr instanceof DyadError &&
+            embErr.kind === DyadErrorKind.MissingApiKey
+          ) {
+            // silently skip embedding — user opted out of OpenAI
+          } else {
+            logger.warn(
+              "[factory] embedding fetch failed, skipping novelty/dedup:",
+              embErr,
+            );
+          }
         }
       }
 
@@ -983,6 +998,8 @@ export function registerFactoryHandlers() {
       try {
         const queryVec = await fetchEmbedding(ideaText);
 
+        // Filter to rows that have an embedding stored — avoids loading rows
+        // that can never contribute to similarity results.
         const rows = await db
           .select({
             id: factoryRuns.id,
@@ -990,33 +1007,44 @@ export function registerFactoryHandlers() {
             status: factoryRuns.status,
             embedding: factoryRuns.embedding,
           })
-          .from(factoryRuns);
+          .from(factoryRuns)
+          .where(isNotNull(factoryRuns.embedding));
 
         type ScoredRun = IdeaEvaluationResult & { similarity: number };
-        const scored: ScoredRun[] = [];
+        // Maintain a top-K list during the scan — O(n × log limit) instead
+        // of O(n log n) for the full sort.  Since limit ≤ 20 the sort cost
+        // per insertion is negligible even for large libraries.
+        const topK: ScoredRun[] = [];
+        let minSimilarityInTopK = -Infinity;
 
         for (const row of rows) {
           if (excludeRunId !== undefined && row.id === excludeRunId) continue;
-          if (!row.embedding) continue;
-          const vec = deserializeEmbedding(row.embedding);
+          // embedding is guaranteed non-null by SQL filter, but be defensive
+          const vec = deserializeEmbedding(row.embedding!);
           if (vec.length === 0) continue;
           const similarity = cosineSimilarity(queryVec, vec);
-          try {
-            const idea = JSON.parse(row.ideaJson) as IdeaEvaluationResult;
-            scored.push({
-              ...idea,
-              runId: row.id,
-              runStatus: (row.status as RunStatus) ?? "DECIDED",
-              similarity,
-            });
-          } catch {
-            // skip corrupt rows
+
+          if (topK.length < limit || similarity > minSimilarityInTopK) {
+            try {
+              const idea = JSON.parse(row.ideaJson) as IdeaEvaluationResult;
+              topK.push({
+                ...idea,
+                runId: row.id,
+                runStatus: (row.status as RunStatus) ?? "DECIDED",
+                similarity,
+              });
+              // Keep sorted DESC and cap at limit
+              topK.sort((a, b) => b.similarity - a.similarity);
+              if (topK.length > limit) topK.pop();
+              minSimilarityInTopK =
+                topK.length > 0 ? topK[topK.length - 1].similarity : -Infinity;
+            } catch {
+              // skip corrupt rows
+            }
           }
         }
 
-        // Sort by similarity descending, then return top `limit`
-        scored.sort((a, b) => b.similarity - a.similarity);
-        return { runs: scored.slice(0, limit) };
+        return { runs: topK };
       } catch (err) {
         if (err instanceof DyadError) throw err;
         throw new DyadError(

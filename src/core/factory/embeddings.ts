@@ -65,9 +65,16 @@ export function serializeEmbedding(v: number[]): string {
 
 export function deserializeEmbedding(s: string): number[] {
   try {
-    const parsed = JSON.parse(s) as number[];
+    const parsed: unknown = JSON.parse(s);
     if (!Array.isArray(parsed)) return [];
-    return parsed;
+    if (
+      !parsed.every(
+        (value) => typeof value === "number" && Number.isFinite(value),
+      )
+    ) {
+      return [];
+    }
+    return parsed as number[];
   } catch {
     return [];
   }

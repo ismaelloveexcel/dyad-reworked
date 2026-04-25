@@ -1,6 +1,6 @@
 // @vitest-environment node
 /**
- * factory_embeddings.test.ts
+ * embeddings.test.ts
  *
  * Unit tests for pure embedding math utilities in
  * src/core/factory/embeddings.ts — no Electron, no DB, no API calls.
@@ -122,6 +122,17 @@ describe("serializeEmbedding / deserializeEmbedding", () => {
 
   it("returns empty array for non-array JSON", () => {
     expect(deserializeEmbedding('{"foo":1}')).toEqual([]);
+  });
+
+  it("returns empty array when the array contains non-finite values", () => {
+    expect(deserializeEmbedding(JSON.stringify([1, Infinity, 3]))).toEqual([]);
+    expect(deserializeEmbedding(JSON.stringify([1, NaN, 3]))).toEqual([]);
+    expect(deserializeEmbedding(JSON.stringify([1, -Infinity, 3]))).toEqual([]);
+  });
+
+  it("returns empty array when the array contains non-number values", () => {
+    expect(deserializeEmbedding(JSON.stringify([1, "two", 3]))).toEqual([]);
+    expect(deserializeEmbedding(JSON.stringify([1, null, 3]))).toEqual([]);
   });
 
   it("serialises to a valid JSON string", () => {
