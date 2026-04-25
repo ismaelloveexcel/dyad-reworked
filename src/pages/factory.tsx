@@ -107,7 +107,7 @@ function OutcomesSection({ runId }: { runId: number }) {
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-zinc-700">
-              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Revenue (¢)</th>
+              <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Revenue (USD¢)</th>
               <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Conversions</th>
               <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Views</th>
               <th className="text-left py-1.5 pr-4 text-zinc-500 font-medium">Churn 30d</th>

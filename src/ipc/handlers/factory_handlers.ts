@@ -622,8 +622,9 @@ function mapLegacyLaunchOutcome(
   } catch {
     return null;
   }
-  // Treat revenueGenerated=true as a non-zero revenue signal (1 USD cent = $0.01)
-  // and launched=true as conversions >= 1. Exact amounts are unknown — signal only.
+  // Treat revenueGenerated=true as a non-zero revenue signal (value=1 cent is a
+  // placeholder signal only — exact amount is unknown for legacy rows) and
+  // launched=true as conversions >= 1.
   const capturedAtSec =
     createdAt instanceof Date
       ? Math.floor(createdAt.getTime() / 1000)
