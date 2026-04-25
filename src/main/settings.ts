@@ -160,6 +160,13 @@ export function readSettings(): UserSettings {
         encryptionType,
       };
     }
+    if (combinedSettings.netlifyAccessToken) {
+      const encryptionType = combinedSettings.netlifyAccessToken.encryptionType;
+      combinedSettings.netlifyAccessToken = {
+        value: decrypt(combinedSettings.netlifyAccessToken),
+        encryptionType,
+      };
+    }
     for (const provider in combinedSettings.providerSettings) {
       if (combinedSettings.providerSettings[provider].apiKey) {
         const encryptionType =
@@ -232,6 +239,11 @@ export function writeSettings(settings: Partial<UserSettings>): void {
     if (newSettings.vercelAccessToken) {
       newSettings.vercelAccessToken = encrypt(
         newSettings.vercelAccessToken.value,
+      );
+    }
+    if (newSettings.netlifyAccessToken) {
+      newSettings.netlifyAccessToken = encrypt(
+        newSettings.netlifyAccessToken.value,
       );
     }
     if (newSettings.supabase) {

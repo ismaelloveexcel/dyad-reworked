@@ -43,6 +43,7 @@ import {
   enrichResult,
   computeFingerprint,
 } from "@/core/factory/main";
+import { registerFactoryDeployHandlers } from "./factory_deploy";
 
 const logger = log.scope("factory_handlers");
 
@@ -1474,6 +1475,9 @@ export function registerFactoryHandlers() {
       }
     },
   );
+
+  // PR #11 — One-click deploy handlers (Vercel + Netlify)
+  registerFactoryDeployHandlers();
 }
 
 // =============================================================================

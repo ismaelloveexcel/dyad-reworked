@@ -350,6 +350,7 @@ export const queryKeys = {
     outcomes: (runId: number) => ["factory", "outcomes", runId] as const,
     scaffold: (runId: number) => ["factory", "scaffold", runId] as const,
     launchKit: (runId: number) => ["factory", "launchKit", runId] as const,
+    deploy: (runId: number) => ["factory", "deploy", runId] as const,
   },
 } as const;
 

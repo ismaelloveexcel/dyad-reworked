@@ -142,6 +142,8 @@ vi.mock("fs/promises", () => ({
   rm: vi.fn().mockResolvedValue(undefined),
   stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
   mkdir: vi.fn().mockResolvedValue(undefined),
+  // PR #11 — readdir used by factory_deploy.collectFiles
+  readdir: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("@/ipc/utils/file_utils", () => ({
@@ -168,6 +170,9 @@ const mockSettingsState = vi.hoisted(() => ({
   // PR #9 — embedding dedup defaults
   factoryEmbeddingDedup: true as boolean | undefined,
   factoryEmbeddingSimilarityThreshold: 0.92 as number | undefined,
+  // PR #11 — deploy token state
+  vercelAccessToken: undefined as { value: string } | undefined,
+  netlifyAccessToken: undefined as { value: string } | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
@@ -177,7 +182,11 @@ vi.mock("@/main/settings", () => ({
     factoryEmbeddingDedup: mockSettingsState.factoryEmbeddingDedup,
     factoryEmbeddingSimilarityThreshold:
       mockSettingsState.factoryEmbeddingSimilarityThreshold,
+    vercelAccessToken: mockSettingsState.vercelAccessToken,
+    netlifyAccessToken: mockSettingsState.netlifyAccessToken,
   })),
+  // PR #11 — writeSettings mock for factory:save-netlify-token
+  writeSettings: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -300,6 +309,9 @@ beforeEach(() => {
   mockSettingsState.factoryProvider = "openai";
   mockSettingsState.factoryEmbeddingDedup = true;
   mockSettingsState.factoryEmbeddingSimilarityThreshold = 0.92;
+  // PR #11 — reset deploy token state
+  mockSettingsState.vercelAccessToken = undefined;
+  mockSettingsState.netlifyAccessToken = undefined;
   // Reset fetchEmbedding to its default implementation
   mockFetchEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   vi.clearAllMocks();
@@ -2273,5 +2285,250 @@ describe("factory:get-similar-runs", () => {
     })) as { runs: unknown[] };
 
     expect(result.runs).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #11 — factory:deploy-app
+// ---------------------------------------------------------------------------
+
+describe("factory:deploy-app", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("throws NotFound when the run does not exist in DB", async () => {
+    mockDbState.rows = [];
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 999, provider: "vercel" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.NotFound });
+  });
+
+  it("throws Auth when Vercel token is not configured", async () => {
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.vercelAccessToken = undefined;
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Netlify token is not configured", async () => {
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.netlifyAccessToken = undefined;
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "netlify" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("deploys to Vercel and returns url when token is present and API succeeds", async () => {
+    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
+      await import("fs/promises");
+
+    // Simulate dist/ with a single file: index.html
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => true, // dist/ exists
+    } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => false, // index.html is a file
+    } as any);
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      Buffer.from("<!doctype html><html/>") as any,
+    );
+
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.vercelAccessToken = { value: "test-vercel-token" };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ url: "my-app-abc123.vercel.app", id: "dpl_xxx" }),
+        text: () => Promise.resolve(""),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    const result = (await handler(mockEvent, {
+      runId: 1,
+      provider: "vercel",
+    })) as { url: string; provider: string };
+
+    expect(result.url).toBe("https://my-app-abc123.vercel.app");
+    expect(result.provider).toBe("vercel");
+  });
+
+  it("throws DeployFailure when Vercel API returns non-ok response", async () => {
+    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
+      await import("fs/promises");
+
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => true,
+    } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => false,
+    } as any);
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      Buffer.from("<html/>") as any,
+    );
+
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.vercelAccessToken = { value: "bad-token" };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve("Unauthorized"),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.DeployFailure });
+  });
+
+  it("deploys to Netlify and returns url when token is present and API succeeds", async () => {
+    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
+      await import("fs/promises");
+
+    // Simulate dist/ with a single file: index.html
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => true, // dist/ directory check
+    } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => false, // index.html is a file
+    } as any);
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      Buffer.from("<!doctype html><html/>") as any,
+    );
+
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.netlifyAccessToken = { value: "test-netlify-token" };
+
+    // Mock Netlify API: create site → create deploy (no required files) → done
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        // POST /sites
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 201,
+          json: () =>
+            Promise.resolve({
+              id: "site-abc",
+              ssl_url: "https://test-site.netlify.app",
+            }),
+          text: () => Promise.resolve(""),
+        })
+        // POST /sites/:id/deploys
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              id: "deploy-xyz",
+              required: [], // no files to upload
+              ssl_url: "https://test-site.netlify.app",
+            }),
+          text: () => Promise.resolve(""),
+        }),
+    );
+
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    const result = (await handler(mockEvent, {
+      runId: 1,
+      provider: "netlify",
+    })) as { url: string; provider: string };
+
+    expect(result.url).toBe("https://test-site.netlify.app");
+    expect(result.provider).toBe("netlify");
+  });
+
+  it("throws DeployFailure when Netlify site creation fails", async () => {
+    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
+      await import("fs/promises");
+
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => true } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => false } as any);
+    vi.mocked(mockReadFile).mockResolvedValueOnce(Buffer.from("<html/>") as any);
+
+    mockDbState.rows = [
+      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
+    ];
+    mockSettingsState.netlifyAccessToken = { value: "bad-token" };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve("Unauthorized"),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "netlify" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.DeployFailure });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #11 — factory:save-netlify-token
+// ---------------------------------------------------------------------------
+
+describe("factory:save-netlify-token", () => {
+  it("throws Auth when token is empty", async () => {
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await expect(
+      handler(mockEvent, { token: "" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Netlify API rejects the token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 401 }),
+    );
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await expect(
+      handler(mockEvent, { token: "bad-token" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("saves token to settings when Netlify API accepts the token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, status: 200 }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await handler(mockEvent, { token: "  netlify_pat_abc123  " });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      netlifyAccessToken: { value: "netlify_pat_abc123" },
+    });
   });
 });
