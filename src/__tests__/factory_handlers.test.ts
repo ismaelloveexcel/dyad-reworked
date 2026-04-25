@@ -348,6 +348,22 @@ describe("factory:generate-ideas", () => {
     ).rejects.toMatchObject({ kind: DyadErrorKind.MissingApiKey });
   });
 
+  it("propagates DyadError(OpenAiRateLimit) when OpenAI returns HTTP 429", async () => {
+    process.env.OPENAI_API_KEY = "sk-valid";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: () => Promise.resolve("rate limit exceeded"),
+      }),
+    );
+    const handler = capturedHandlers.get("factory:generate-ideas")!;
+    await expect(
+      handler(mockEvent, { mode: "fast-money" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.OpenAiRateLimit });
+  });
+
   it("falls back to template ideas when OpenAI returns HTTP 401 (External error)", async () => {
     process.env.OPENAI_API_KEY = "sk-invalid";
     vi.stubGlobal(
@@ -366,18 +382,70 @@ describe("factory:generate-ideas", () => {
     expect(result.ideas.every((i) => i.fallbackUsed)).toBe(true);
   });
 
-  it("returns parsed ideas sorted by totalScore DESC when OpenAI responds", async () => {
+  it("returns ideas sorted by totalScore DESC when OpenAI responds with multiple ideas", async () => {
     process.env.OPENAI_API_KEY = "sk-valid";
-    const idea = makeIdea({ totalScore: 30, decision: "BUILD" });
+    const ideaHigh = makeIdea({
+      name: "High Score Tool",
+      totalScore: 36,
+      scores: {
+        buyerClarity: 5,
+        painUrgency: 5,
+        marketExistence: 4,
+        differentiation: 4,
+        replaceability: 4,
+        virality: 4,
+        monetisation: 5,
+        buildSimplicity: 5,
+      },
+    });
+    const ideaLow = makeIdea({
+      name: "Low Score Tool",
+      totalScore: 22,
+      scores: {
+        buyerClarity: 3,
+        painUrgency: 3,
+        marketExistence: 3,
+        differentiation: 2,
+        replaceability: 3,
+        virality: 3,
+        monetisation: 2,
+        buildSimplicity: 3,
+      },
+    });
+    const ideaMid = makeIdea({
+      name: "Mid Score Tool",
+      totalScore: 28,
+      scores: {
+        buyerClarity: 4,
+        painUrgency: 4,
+        marketExistence: 3,
+        differentiation: 3,
+        replaceability: 3,
+        virality: 3,
+        monetisation: 4,
+        buildSimplicity: 4,
+      },
+    });
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue(makeFakeOpenAIResponse(JSON.stringify([idea]))),
+      vi
+        .fn()
+        .mockResolvedValue(
+          makeFakeOpenAIResponse(JSON.stringify([ideaLow, ideaHigh, ideaMid])),
+        ),
     );
     const handler = capturedHandlers.get("factory:generate-ideas")!;
     const result = (await handler(mockEvent, { mode: "premium" })) as {
-      ideas: { name: string }[];
+      ideas: { name: string; totalScore: number }[];
     };
-    expect(result.ideas.length).toBeGreaterThanOrEqual(1);
+    expect(result.ideas.length).toBe(3);
+    // Scores must be non-increasing
+    for (let i = 1; i < result.ideas.length; i++) {
+      expect(result.ideas[i].totalScore).toBeLessThanOrEqual(
+        result.ideas[i - 1].totalScore,
+      );
+    }
+    expect(result.ideas[0].name).toBe("High Score Tool");
   });
 });
 

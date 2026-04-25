@@ -19,19 +19,20 @@ const testWithFakeLlm = testWithConfig({
     // factory_handlers.ts reads OPENAI_BASE_URL at module load time.
     process.env.OPENAI_BASE_URL = `http://localhost:${fakeLlmPort}`;
   },
+  postLaunchHook: async () => {
+    // Clean up the override so it doesn't leak into other specs in the
+    // same worker process.
+    delete process.env.OPENAI_BASE_URL;
+  },
 });
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-test("factory page — missing API key banner is shown when key is absent", async ({
-  po,
-}) => {
-  // po.setUp() sets OPENAI_API_KEY = "sk-test" by default.
-  // We use the default test (which sets OPENAI_API_KEY) just to verify the
-  // page loads.  The missing-key banner is shown when the key IS absent —
-  // covered by the separate `testWithConfig({ showSetupScreen: true })` below.
+test("factory page — page loads with evaluate-idea form", async ({ po }) => {
+  // Uses default fixture which sets OPENAI_API_KEY = "sk-test".
+  // Verifies the Factory page is reachable and shows the idea input form.
   await po.navigation.goToSettingsTab();
   await po.page.getByRole("link", { name: "Factory" }).click();
   await expect(

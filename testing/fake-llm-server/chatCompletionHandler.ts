@@ -28,45 +28,41 @@ export const createChatCompletionHandler =
     }
 
     // ---------------------------------------------------------------------------
-    // Factory handler: return valid factory JSON for evaluate-idea prompts.
-    // The factory IPC handler calls OpenAI with a non-streaming request; we
-    // detect it here and return a canned valid response so E2E tests do not
-    // depend on a real OpenAI API key.
-    //
-    // Detection uses a combination of signals rather than a single string so
-    // the check stays correct even if minor wording in the system prompt
-    // changes: the system message must mention JSON evaluation AND app ideas,
-    // and the request must be non-streaming with no tc= test-case override.
+    // Factory handler: return valid factory JSON for factory:* IPC calls.
+    // All three factory OpenAI calls use the same system message prefix, so we
+    // branch on the user message to return the correct response shape for each:
+    //   - evaluate-idea  → single IdeaEvaluationResult JSON object
+    //   - generate-ideas → JSON array of IdeaEvaluationResult objects
+    //   - generate-portfolio → GeneratePortfolioResponse JSON object
+    // Detection is non-streaming + "app idea evaluator" in system msg + no tc=.
     // ---------------------------------------------------------------------------
     const systemMessage = messages.find((m: any) => m.role === "system");
-    const isFactoryRequest =
+    const isFactorySystemMsg =
       !stream &&
       systemMessage &&
       typeof systemMessage.content === "string" &&
-      systemMessage.content.includes("app idea evaluator") &&
-      systemMessage.content.includes("valid JSON") &&
+      (systemMessage.content.includes("app idea evaluator") ||
+        systemMessage.content.includes("app idea strategist")) &&
       !(
         typeof lastMessage?.content === "string" &&
         lastMessage.content.startsWith("tc=")
       );
 
-    if (isFactoryRequest) {
-      // Extract the idea text from the prompt if possible
+    if (isFactorySystemMsg) {
       const userMsg = messages.find((m: any) => m.role === "user");
-      const ideaMatch =
-        typeof userMsg?.content === "string"
-          ? userMsg.content.match(
-              /Evaluate this app idea for a solo developer: "([^"]+)"/,
-            )
-          : null;
-      const ideaText = ideaMatch
-        ? ideaMatch[1]
-        : "Salary benchmark tool for UAE professionals";
+      const userText =
+        typeof userMsg?.content === "string" ? userMsg.content : "";
 
-      const factoryResponse = JSON.stringify({
-        idea: ideaText,
+      // Build a reusable single-idea fixture
+      const makeFakeIdea = (
+        engineType?: string,
+        idea?: string,
+        decision?: string,
+      ) => ({
+        idea: idea ?? "Fake factory idea from test server",
         name: "Fake Factory Tool",
         buyer: "Test buyers",
+        engineType: engineType ?? undefined,
         scores: {
           buyerClarity: 4,
           painUrgency: 4,
@@ -78,14 +74,42 @@ export const createChatCompletionHandler =
           buildSimplicity: 4,
         },
         totalScore: 28,
-        decision: "BUILD",
-        reason: "Fake evaluation produced by the test fake-llm-server.",
+        decision: decision ?? "BUILD",
+        reason: "Fake evaluation from test fake-llm-server.",
         improvedIdea: "",
         buildPrompt: "Build the fake factory tool here.",
         monetisationAngle: "One-time payment",
         viralTrigger: "Share your score",
         fallbackUsed: false,
       });
+
+      let factoryResponse: string;
+
+      if (userText.includes("Generate EXACTLY 3 app ideas")) {
+        // generate-portfolio → portfolio JSON object
+        factoryResponse = JSON.stringify({
+          revenueIdea: makeFakeIdea("revenue"),
+          viralIdea: makeFakeIdea("viral"),
+          experimentalIdea: makeFakeIdea("experimental", undefined, "REWORK"),
+          portfolioLink:
+            "Viral idea drives free users into the revenue idea funnel.",
+        });
+      } else if (userText.startsWith("Generate exactly 10 monetisable")) {
+        // generate-ideas → JSON array
+        factoryResponse = JSON.stringify([
+          makeFakeIdea(undefined, "Idea A from fake server"),
+          makeFakeIdea(undefined, "Idea B from fake server"),
+        ]);
+      } else {
+        // evaluate-idea → single IdeaEvaluationResult
+        const ideaMatch = userText.match(
+          /Evaluate this app idea for a solo developer: "([^"]+)"/,
+        );
+        const ideaText = ideaMatch
+          ? ideaMatch[1]
+          : "Salary benchmark tool for UAE professionals";
+        factoryResponse = JSON.stringify(makeFakeIdea(undefined, ideaText));
+      }
 
       return res.json({
         id: `chatcmpl-factory-${Date.now()}`,
