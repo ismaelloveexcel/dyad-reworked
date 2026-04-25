@@ -12,6 +12,8 @@ export function FactoryEmbeddingDedupSwitch() {
   const { settings, updateSettings } = useSettings();
 
   const enabled = settings?.factoryEmbeddingDedup !== false;
+  const threshold = settings?.factoryEmbeddingSimilarityThreshold ?? 0.92;
+  const thresholdPct = Math.round(threshold * 100);
 
   return (
     <div className="space-y-1">
@@ -33,7 +35,7 @@ export function FactoryEmbeddingDedupSwitch() {
       </div>
       <div className="text-sm text-gray-500 dark:text-gray-400">
         {enabled
-          ? "Embedding-based dedup is on. Near-duplicate ideas (cosine similarity ≥ 0.92) are flagged without being saved."
+          ? `Embedding-based dedup is on. Near-duplicate ideas (cosine similarity ≥ ${thresholdPct}%) are flagged without being saved.`
           : "Embedding-based dedup is off. Only exact fingerprint matches are detected."}
       </div>
     </div>
