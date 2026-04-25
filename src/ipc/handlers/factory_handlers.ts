@@ -420,6 +420,10 @@ async function callWithRetry(prompt: string): Promise<string> {
 // =============================================================================
 
 /** Build the prompt for generating a launch kit from an evaluated idea. */
+// Max chars of buildPrompt included in the launch-kit prompt. 400 is enough
+// context for marketing copy; keeping it short avoids inflating token cost.
+const LAUNCH_KIT_BUILD_PROMPT_MAX = 400;
+
 export function LAUNCH_KIT_PROMPT(idea: IdeaEvaluationResult): string {
   return `You are a world-class startup marketer. Given the app idea below, produce launch copywriting and a deployment guide.
 
@@ -428,7 +432,7 @@ Buyer: ${idea.buyer}
 Idea: ${idea.idea}
 Monetisation angle: ${idea.monetisationAngle ?? ""}
 Viral trigger: ${idea.viralTrigger ?? ""}
-Build prompt: ${(idea.buildPrompt ?? "").slice(0, 400)}
+Build prompt: ${(idea.buildPrompt ?? "").slice(0, LAUNCH_KIT_BUILD_PROMPT_MAX)}
 
 Respond ONLY with valid JSON — no markdown, no code fences, no commentary — matching this exact schema:
 {

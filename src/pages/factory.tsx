@@ -359,7 +359,7 @@ function LaunchKitSection({ result }: { result: IdeaEvaluationResult }) {
       factoryClient.exportLaunchKit({ runId: runId!, kit }),
   });
 
-  if (runId == null || runId <= 0) return null;
+  if (!runId || runId <= 0) return null;
 
   const kit = generateMutation.data;
 

@@ -1521,32 +1521,38 @@ function makeLaunchKitJson(): string {
   });
 }
 
-describe("factory:generate-launch-kit", () => {
-  // Some earlier tests (factory:list-outcomes) override db.select with a
-  // callCount-based implementation. vi.clearAllMocks() only clears call
-  // history, not the implementation. Restore the standard mockDbState chain
-  // before each test in this describe block.
-  beforeEach(async () => {
-    const { db: dbModule } = await import("@/db");
-    vi.mocked(dbModule.select).mockImplementation(() => {
-      const chain: Record<string, unknown> = {
-        from: (..._: unknown[]) => chain,
-        where: (..._: unknown[]) => chain,
-        orderBy: (..._: unknown[]) => chain,
-        set: (..._: unknown[]) => chain,
-        values: (..._: unknown[]) => chain,
-        limit: (..._: unknown[]) => Promise.resolve(mockDbState.rows),
-        returning: (..._: unknown[]) =>
-          Promise.resolve([{ id: mockDbState.insertedId }]),
-        // eslint-disable-next-line unicorn/no-thenable
-        then: (
-          resolve: (v: unknown) => unknown,
-          reject?: (e: unknown) => unknown,
-        ) => Promise.resolve(mockDbState.rows).then(resolve, reject),
-      };
-      return chain as unknown as ReturnType<typeof dbModule.select>;
-    });
+/**
+ * Restores db.select to the standard mockDbState-based chain.
+ *
+ * Some earlier tests (factory:list-outcomes) override db.select with a
+ * callCount-based implementation. vi.clearAllMocks() only clears call
+ * history, not the implementation. Call this in a beforeEach for any
+ * describe block that needs the standard mockDbState behaviour.
+ */
+async function restoreDbSelectToMockChain(): Promise<void> {
+  const { db: dbModule } = await import("@/db");
+  vi.mocked(dbModule.select).mockImplementation(() => {
+    const chain: Record<string, unknown> = {
+      from: (..._: unknown[]) => chain,
+      where: (..._: unknown[]) => chain,
+      orderBy: (..._: unknown[]) => chain,
+      set: (..._: unknown[]) => chain,
+      values: (..._: unknown[]) => chain,
+      limit: (..._: unknown[]) => Promise.resolve(mockDbState.rows),
+      returning: (..._: unknown[]) =>
+        Promise.resolve([{ id: mockDbState.insertedId }]),
+      // eslint-disable-next-line unicorn/no-thenable
+      then: (
+        resolve: (v: unknown) => unknown,
+        reject?: (e: unknown) => unknown,
+      ) => Promise.resolve(mockDbState.rows).then(resolve, reject),
+    };
+    return chain as unknown as ReturnType<typeof dbModule.select>;
   });
+}
+
+describe("factory:generate-launch-kit", () => {
+  beforeEach(restoreDbSelectToMockChain);
   it("returns a valid LaunchKit from a successful LLM response", async () => {
     process.env.OPENAI_API_KEY = "sk-test";
     mockDbState.rows = [
@@ -1762,28 +1768,7 @@ describe("factory:generate-launch-kit", () => {
 // ---------------------------------------------------------------------------
 
 describe("factory:export-launch-kit", () => {
-  // Same db.select restoration as factory:generate-launch-kit (see above).
-  beforeEach(async () => {
-    const { db: dbModule } = await import("@/db");
-    vi.mocked(dbModule.select).mockImplementation(() => {
-      const chain: Record<string, unknown> = {
-        from: (..._: unknown[]) => chain,
-        where: (..._: unknown[]) => chain,
-        orderBy: (..._: unknown[]) => chain,
-        set: (..._: unknown[]) => chain,
-        values: (..._: unknown[]) => chain,
-        limit: (..._: unknown[]) => Promise.resolve(mockDbState.rows),
-        returning: (..._: unknown[]) =>
-          Promise.resolve([{ id: mockDbState.insertedId }]),
-        // eslint-disable-next-line unicorn/no-thenable
-        then: (
-          resolve: (v: unknown) => unknown,
-          reject?: (e: unknown) => unknown,
-        ) => Promise.resolve(mockDbState.rows).then(resolve, reject),
-      };
-      return chain as unknown as ReturnType<typeof dbModule.select>;
-    });
-  });
+  beforeEach(restoreDbSelectToMockChain);
   const validKit = {
     elevatorPitch: "Automate invoices for UAE freelancers.",
     twitterPost: "Invoice automation for UAE freelancers! #freelance",
