@@ -129,10 +129,38 @@ All factory errors must use `DyadError` with one of these kinds:
 
 ---
 
+## Brand / Design System (PR #7)
+
+The scaffold template (`scaffold/`) ships a brand design system that the scaffolder codemod injects at build time.
+
+### Key files
+
+| File                                  | Role                                                           |
+| ------------------------------------- | -------------------------------------------------------------- |
+| `scaffold/src/brand.css`              | Default brand CSS custom properties (overridden by codemod)    |
+| `scaffold/src/main.tsx`               | Imports `brand.css` after `globals.css` so it cascades cleanly |
+| `scaffold/tailwind.config.ts`         | `fontFamily.sans` preset (Inter + system stack)                |
+| `src/ipc/handlers/factory_brand.ts`   | Pure utilities: `hexToHsl()`, `buildBrandCss()`                |
+| `src/__tests__/factory_brand.test.ts` | Unit tests for brand utilities                                 |
+
+### How the brand codemod works
+
+`factory:scaffold-app` accepts an optional `primaryColor` hex string. After the Index.tsx codemod, the handler calls `buildBrandCss(primaryColor)` and writes the result to `<destDir>/src/brand.css`. This overrides only `--primary`, `--primary-foreground`, and `--ring` so the rest of Shadcn's design tokens remain intact.
+
+### Extending the brand system
+
+- Add new CSS custom properties to both the scaffold default `brand.css` and the `buildBrandCss()` generator in `factory_brand.ts`.
+- Add new palette presets to `BRAND_PALETTES` in `src/pages/factory.tsx`.
+- Always add a test to `src/__tests__/factory_brand.test.ts` for new brand utilities.
+- `hexToHsl()` and `buildBrandCss()` must remain **pure and Node-only** — no Electron imports.
+
+---
+
 ## Testing
 
 - Unit tests: `npx vitest run src/__tests__/factory_validator.test.ts`
 - Smoke test (Node-only): `npm run smoke`
+- Brand tests: `npx vitest run src/__tests__/factory_brand.test.ts`
 - Must always have `// @vitest-environment node` at top of test files touching factory validators.
 
 ---

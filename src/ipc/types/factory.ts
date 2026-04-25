@@ -273,12 +273,20 @@ export const factoryContracts = {
   }),
   // PR #6 — Deterministic scaffolder: copies scaffold/ template, runs codemods,
   // npm install, npm run build; returns preview path + captured logs.
+  // PR #7 — Extended with optional `primaryColor` hex for brand CSS injection.
   scaffoldApp: defineContract({
     channel: "factory:scaffold-app",
     input: z.object({
       runId: z.number().int().positive(),
       appName: z.string().min(1),
       tagline: z.string().optional(),
+      /** PR #7 — 3- or 6-digit hex brand color (with or without `#`), e.g. "#4F46E5" or "#f0a". When provided the
+       *  scaffolder writes brand.css with matching CSS custom properties so the
+       *  scaffolded app inherits the chosen palette. */
+      primaryColor: z
+        .string()
+        .regex(/^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/)
+        .optional(),
     }),
     output: z.object({
       previewPath: z.string(), // absolute path to the built dist/ directory

@@ -23,6 +23,7 @@ import {
   deterministicFallback,
   detectRegulatedDomain,
 } from "./factory_validator";
+import { buildBrandCss } from "./factory_brand";
 import { readSettings } from "@/main/settings";
 import {
   PROMPT_VERSION,
@@ -881,7 +882,7 @@ export function registerFactoryHandlers() {
 
   createTypedHandler(
     factoryContracts.scaffoldApp,
-    async (_, { runId, appName, tagline }) => {
+    async (_, { runId, appName, tagline, primaryColor }) => {
       // -----------------------------------------------------------------------
       // Bounded log buffer — cap at 500 lines / 256 KB to avoid memory bloat
       // from verbose npm output.
@@ -916,21 +917,23 @@ export function registerFactoryHandlers() {
 
       // Escape HTML special characters for use in HTML attributes and text content
       const escapeHtml = (str: string): string =>
-        str.replace(
-          /[<>&"]/g,
-          (c) =>
-            c === "<" ? "&lt;"
-            : c === ">" ? "&gt;"
-            : c === "&" ? "&amp;"
-            : "&quot;",
+        str.replace(/[<>&"]/g, (c) =>
+          c === "<"
+            ? "&lt;"
+            : c === ">"
+              ? "&gt;"
+              : c === "&"
+                ? "&amp;"
+                : "&quot;",
         );
 
       // Derive a filesystem-safe slug from the app name
-      const slug = appName
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-+|-+$/g, "")
-        .slice(0, 64) || `factory-app-${runId}`;
+      const slug =
+        appName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 64) || `factory-app-${runId}`;
 
       const sandboxRoot = path.join(app.getPath("userData"), "factory-apps");
       const destDir = path.join(sandboxRoot, slug);
@@ -989,16 +992,33 @@ export function registerFactoryHandlers() {
           tagline ?? "Built with Dyad.",
         ).slice(1, -1);
         const patchedIndexTsx = indexTsx
-          .replace(
-            /Welcome to Your Blank App/g,
-            () => safeAppNameJs,
-          )
+          .replace(/Welcome to Your Blank App/g, () => safeAppNameJs)
           .replace(
             /Start building your amazing project here!/g,
             () => safeTaglineJs,
           );
         await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
         pushLog("Patched src/pages/Index.tsx content.");
+
+        // -----------------------------------------------------------------------
+        // PR #7 — Brand codemod: write brand.css with the chosen primary color.
+        // Falls back non-fatally to the scaffold default and logs a warning if the hex is invalid.
+        // -----------------------------------------------------------------------
+        if (primaryColor) {
+          const brandCssPath = path.join(destDir, "src", "brand.css");
+          try {
+            const brandCss = buildBrandCss(primaryColor);
+            await writeFile(brandCssPath, brandCss, "utf-8");
+            pushLog(
+              `Injected brand palette (${primaryColor}) into src/brand.css.`,
+            );
+          } catch (brandErr) {
+            // Non-fatal: log the warning but continue with the default brand.css
+            pushLog(
+              `Warning: could not inject brand color "${primaryColor}": ${brandErr instanceof Error ? brandErr.message : String(brandErr)}. Using default palette.`,
+            );
+          }
+        }
 
         // -----------------------------------------------------------------------
         // npm install

@@ -1,0 +1,13 @@
+/* DYAD:BRAND_CSS — written by factory:scaffoldApp codemod (PR #7); do not edit manually */
+@layer base {
+  :root {
+    --primary: 215 25% 27%;
+    --primary-foreground: 210 40% 98%;
+    --ring: 215 25% 27%;
+  }
+  .dark {
+    --primary: 215 25% 80%;
+    --primary-foreground: 222 47% 11%;
+    --ring: 215 25% 80%;
+  }
+}
