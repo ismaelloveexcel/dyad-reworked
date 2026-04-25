@@ -7,7 +7,8 @@ import {
   type RunStatus,
   type LaunchKit,
   factoryClient,
-} from "@/ipc/types/factory";import {
+} from "@/ipc/types/factory";
+import {
   type PipelineStatus,
   type PipelineEntry,
   type TractionEntry,
@@ -435,8 +436,6 @@ function DeploySection({ result }: { result: IdeaEvaluationResult }) {
     </div>
   );
 }
-
-
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
