@@ -92,6 +92,14 @@ function OutcomesSection({ runId }: { runId: number }) {
     );
   }
 
+  if (query.isError) {
+    return (
+      <div className="text-xs text-red-400 italic">
+        Failed to load outcomes.
+      </div>
+    );
+  }
+
   const outcomes = query.data?.outcomes ?? [];
   if (outcomes.length === 0) return null;
 

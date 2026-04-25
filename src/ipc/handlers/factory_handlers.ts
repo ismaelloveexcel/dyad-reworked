@@ -611,15 +611,29 @@ export function registerFactoryHandlers() {
 // render it uniformly.
 // =============================================================================
 
+function isLegacyLaunchOutcome(value: unknown): value is LaunchOutcome {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.launched === "boolean" &&
+    typeof candidate.revenueGenerated === "boolean"
+  );
+}
+
 function mapLegacyLaunchOutcome(
   runId: number,
   raw: string,
   createdAt: Date | number | null,
 ): QuantitativeLaunchOutcome | null {
-  let legacy: LaunchOutcome;
+  let parsed: unknown;
   try {
-    legacy = JSON.parse(raw) as LaunchOutcome;
+    parsed = JSON.parse(raw);
   } catch {
+    return null;
+  }
+  if (!isLegacyLaunchOutcome(parsed)) {
     return null;
   }
   // Treat revenueGenerated=true as a non-zero revenue signal (value=1 cent is a
@@ -634,8 +648,8 @@ function mapLegacyLaunchOutcome(
   return {
     id: -1,
     runId,
-    revenueUsd: legacy.revenueGenerated ? 1 : null,
-    conversions: legacy.launched ? 1 : null,
+    revenueUsd: parsed.revenueGenerated ? 1 : null,
+    conversions: parsed.launched ? 1 : null,
     views: null,
     churn30d: null,
     source: "legacy",

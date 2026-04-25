@@ -261,7 +261,7 @@ export const factoryContracts = {
   }),
   // PR #5 — Read quantitative outcomes for a run (no ingest yet)
   listOutcomes: defineContract({
-    channel: "outcomes:list",
+    channel: "factory:list-outcomes",
     input: z.object({ runId: z.number() }),
     output: z.object({
       outcomes: z.array(QuantitativeLaunchOutcomeSchema),
