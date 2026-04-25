@@ -29,6 +29,8 @@ export enum DyadErrorKind {
   InvalidLlmResponse = "invalid_llm_response",
   /** Factory persistence read/write failure. */
   FactoryPersistenceFailure = "factory_persistence_failure",
+  /** Idea score is below the configured quality-gate threshold; not persisted. */
+  QualityGateRejection = "quality_gate_rejection",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -43,6 +45,7 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.MissingApiKey,
   DyadErrorKind.OpenAiRateLimit,
   DyadErrorKind.InvalidLlmResponse,
+  DyadErrorKind.QualityGateRejection,
 ]);
 
 /**

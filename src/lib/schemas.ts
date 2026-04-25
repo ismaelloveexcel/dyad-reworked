@@ -358,6 +358,8 @@ const BaseUserSettingsFields = {
   enableContextCompaction: z.boolean().optional(),
   skipNotificationBanner: z.boolean().optional(),
   enableSelectAppFromHomeChatInput: z.boolean().optional(),
+  // PR #3 — Factory quality gate: minimum totalScore (out of 40) to persist a run
+  factoryScoreThreshold: z.number().optional(),
 };
 
 /**

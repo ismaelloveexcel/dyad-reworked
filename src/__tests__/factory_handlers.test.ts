@@ -119,6 +119,20 @@ vi.mock("fs/promises", () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// Mock settings so saveRun can read the quality-gate threshold
+// ---------------------------------------------------------------------------
+
+const mockSettingsState = vi.hoisted(() => ({
+  factoryScoreThreshold: 20 as number | undefined,
+}));
+
+vi.mock("@/main/settings", () => ({
+  readSettings: vi.fn(() => ({
+    factoryScoreThreshold: mockSettingsState.factoryScoreThreshold,
+  })),
+}));
+
+// ---------------------------------------------------------------------------
 // Import handlers after mocks are wired
 // ---------------------------------------------------------------------------
 
@@ -186,6 +200,7 @@ beforeEach(() => {
   capturedHandlers.clear();
   mockDbState.rows = [];
   mockDbState.insertedId = 1;
+  mockSettingsState.factoryScoreThreshold = 20;
   vi.clearAllMocks();
   // Re-wire createTypedHandler after clearAllMocks (implementation is preserved,
   // but we clear call history). Calling registerFactoryHandlers() re-populates the map.
@@ -573,6 +588,45 @@ describe("factory:save-run", () => {
       id: number;
     };
     expect(result.id).toBe(1);
+  });
+
+  // PR #3 — Quality gate
+  it("throws DyadError(QualityGateRejection) when idea score is below threshold", async () => {
+    mockSettingsState.factoryScoreThreshold = 20;
+    registerFactoryHandlers();
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const lowScoreIdea = makeIdea({ totalScore: 15 });
+    await expect(
+      handler(mockEvent, { idea: lowScoreIdea }),
+    ).rejects.toMatchObject({
+      kind: DyadErrorKind.QualityGateRejection,
+    });
+  });
+
+  it("persists idea when score equals the threshold (boundary)", async () => {
+    mockSettingsState.factoryScoreThreshold = 20;
+    registerFactoryHandlers();
+    mockDbState.rows = [];
+    mockDbState.insertedId = 5;
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const exactIdea = makeIdea({ totalScore: 20 });
+    const result = (await handler(mockEvent, { idea: exactIdea })) as {
+      id: number;
+    };
+    expect(result.id).toBe(5);
+  });
+
+  it("persists idea when threshold is 0 (quality gate off)", async () => {
+    mockSettingsState.factoryScoreThreshold = 0;
+    registerFactoryHandlers();
+    mockDbState.rows = [];
+    mockDbState.insertedId = 3;
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const lowIdea = makeIdea({ totalScore: 5 });
+    const result = (await handler(mockEvent, { idea: lowIdea })) as {
+      id: number;
+    };
+    expect(result.id).toBe(3);
   });
 });
 

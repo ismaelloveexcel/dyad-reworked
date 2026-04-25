@@ -39,6 +39,7 @@ export const SETTING_IDS = {
   enableMcpServersForBuildMode: "setting-enable-mcp-servers-for-build-mode",
   enableSelectAppFromHomeChatInput:
     "setting-enable-select-app-from-home-chat-input",
+  factoryScoreThreshold: "setting-factory-score-threshold",
   reset: "setting-reset",
 } as const;
 
@@ -385,6 +386,26 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
     keywords: ["app", "select", "home", "chat", "experiment", "input"],
     sectionId: SECTION_IDS.experiments,
     sectionLabel: "Experiments",
+  },
+
+  // Factory Settings
+  {
+    id: SETTING_IDS.factoryScoreThreshold,
+    label: "Factory Quality Gate Threshold",
+    description:
+      "Minimum total score (out of 40) an idea must reach before it is saved. Ideas below this threshold are rejected at persist-time.",
+    keywords: [
+      "factory",
+      "score",
+      "threshold",
+      "quality",
+      "gate",
+      "persist",
+      "minimum",
+      "filter",
+    ],
+    sectionId: SECTION_IDS.workflow,
+    sectionLabel: "Workflow",
   },
 
   // Danger Zone

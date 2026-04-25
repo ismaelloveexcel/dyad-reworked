@@ -11,6 +11,8 @@ import {
   validateIdeaResult,
   validateGenerateIdeasResponse,
   deterministicFallback,
+  detectRegulatedDomain,
+  generateBuildPrompt,
 } from "@/ipc/handlers/factory_validator";
 import type { IdeaEvaluationResult } from "@/ipc/types/factory";
 
@@ -208,5 +210,170 @@ describe("validateGenerateIdeasResponse", () => {
   it("returns null for an empty ideas array (rejects empty response)", () => {
     const result = validateGenerateIdeasResponse({ ideas: [] });
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #3 — detectRegulatedDomain
+// ---------------------------------------------------------------------------
+
+describe("detectRegulatedDomain", () => {
+  it("returns true for legal-domain ideas", () => {
+    expect(
+      detectRegulatedDomain("UAE Labour Law termination risk scorecard"),
+    ).toBe(true);
+    expect(
+      detectRegulatedDomain("contract red flag detector for freelancers"),
+    ).toBe(true);
+    expect(detectRegulatedDomain("legal compliance audit tool")).toBe(true);
+  });
+
+  it("returns true for HR/visa ideas", () => {
+    expect(detectRegulatedDomain("Visa eligibility calculator for UAE")).toBe(
+      true,
+    );
+    expect(detectRegulatedDomain("Work permit requirements checker")).toBe(
+      true,
+    );
+    expect(detectRegulatedDomain("HR payroll compliance tool")).toBe(true);
+  });
+
+  it("returns true for medical ideas", () => {
+    expect(
+      detectRegulatedDomain("Medication dosage calculator for patients"),
+    ).toBe(true);
+    expect(detectRegulatedDomain("clinical trial recruitment screening")).toBe(
+      true,
+    );
+  });
+
+  it("returns true for financial-advice ideas", () => {
+    expect(
+      detectRegulatedDomain("Investment advice platform for retail investors"),
+    ).toBe(true);
+    expect(detectRegulatedDomain("tax advice tool for UAE freelancers")).toBe(
+      true,
+    );
+  });
+
+  it("returns false for non-regulated ideas", () => {
+    expect(detectRegulatedDomain("invoice generator for freelancers")).toBe(
+      false,
+    );
+    expect(
+      detectRegulatedDomain("viral meme scorecard for Twitter creators"),
+    ).toBe(false);
+    expect(detectRegulatedDomain("resume builder for software engineers")).toBe(
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #3 — generateBuildPrompt disclaimer injection
+// ---------------------------------------------------------------------------
+
+describe("generateBuildPrompt", () => {
+  const baseParams = {
+    name: "UAE Salary Benchmark Tool",
+    buyer: "UAE HR managers",
+    idea: "Benchmark salary data for UAE professionals",
+    monetisationAngle: "One-time $29 purchase",
+    viralTrigger: "Share the salary report",
+  };
+
+  it("does NOT include disclaimer when regulatedDomain is false", () => {
+    const prompt = generateBuildPrompt({
+      ...baseParams,
+      regulatedDomain: false,
+    });
+    expect(prompt).not.toContain("REGULATED DOMAIN");
+    expect(prompt).not.toContain("disclaimer");
+  });
+
+  it("injects mandatory disclaimer section when regulatedDomain is true", () => {
+    const prompt = generateBuildPrompt({
+      ...baseParams,
+      regulatedDomain: true,
+    });
+    expect(prompt).toContain("REGULATED DOMAIN");
+    expect(prompt).toContain("disclaimer");
+    expect(prompt).toContain("qualified professional");
+  });
+
+  it("does NOT include disclaimer when regulatedDomain is undefined", () => {
+    const prompt = generateBuildPrompt({ ...baseParams });
+    expect(prompt).not.toContain("REGULATED DOMAIN");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #3 — regulatedDomain field propagation via deterministicFallback
+// ---------------------------------------------------------------------------
+
+describe("deterministicFallback — regulatedDomain", () => {
+  it("sets regulatedDomain=true for a legal/compliance idea", () => {
+    const result = deterministicFallback(
+      "UAE Labour Law termination risk scorecard for HR managers",
+    );
+    expect(result.regulatedDomain).toBe(true);
+  });
+
+  it("sets regulatedDomain=false for a non-regulated idea", () => {
+    const result = deterministicFallback(
+      "Viral meme scorecard for Twitter creators",
+    );
+    expect(result.regulatedDomain).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #3 — regulatedDomain injected by validateIdeaResult
+// ---------------------------------------------------------------------------
+
+describe("validateIdeaResult — regulatedDomain", () => {
+  function makeRawResult(
+    overrides: Partial<IdeaEvaluationResult> = {},
+  ): string {
+    return JSON.stringify({
+      idea: "test",
+      name: "Test",
+      buyer: "Test buyer",
+      scores: {
+        buyerClarity: 3,
+        painUrgency: 3,
+        marketExistence: 3,
+        differentiation: 3,
+        replaceability: 3,
+        virality: 3,
+        monetisation: 3,
+        buildSimplicity: 3,
+      },
+      totalScore: 24,
+      decision: "REWORK",
+      reason: "ok",
+      improvedIdea: "",
+      buildPrompt: "",
+      monetisationAngle: "Subscription",
+      viralTrigger: "Share",
+      fallbackUsed: false,
+      ...overrides,
+    });
+  }
+
+  it("sets regulatedDomain=true when idea text matches the regulated pattern", () => {
+    const result = validateIdeaResult(
+      makeRawResult({ idea: "UAE Labour Law compliance checker" }),
+      "UAE Labour Law compliance checker",
+    );
+    expect(result.regulatedDomain).toBe(true);
+  });
+
+  it("sets regulatedDomain=false for a non-regulated idea text", () => {
+    const result = validateIdeaResult(
+      makeRawResult({ idea: "A viral meme generator" }),
+      "A viral meme generator",
+    );
+    expect(result.regulatedDomain).toBe(false);
   });
 });
