@@ -11,9 +11,12 @@ import { db } from "@/db";
 import { factoryRuns, launchOutcomes } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import log from "electron-log";
-import { dialog, BrowserWindow } from "electron";
-import { writeFile } from "fs/promises";
+import { app, dialog, BrowserWindow } from "electron";
+import { writeFile, readFile, stat, rm } from "fs/promises";
+import path from "node:path";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
+import { copyDirectoryRecursive } from "@/ipc/utils/file_utils";
+import { runCommand } from "@/ipc/utils/socket_firewall";
 import {
   stableHash,
   validateIdeaResult,
@@ -602,6 +605,214 @@ export function registerFactoryHandlers() {
       );
     }
   });
+
+  // ===========================================================================
+  // PR #6 — Deterministic scaffolder
+  // Copies scaffold/ template → userData/factory-apps/<slug>/
+  // Runs codemods (app name, tagline), npm install, npm run build.
+  // Returns the absolute path to the built dist/ directory and captured logs.
+  // Sandbox writes are confined to userData/factory-apps/ — never the user's
+  // project or home directory.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.scaffoldApp,
+    async (_, { runId, appName, tagline }) => {
+      // -----------------------------------------------------------------------
+      // Bounded log buffer — cap at 500 lines / 256 KB to avoid memory bloat
+      // from verbose npm output.
+      // -----------------------------------------------------------------------
+      const MAX_SCAFFOLD_LOG_LINES = 500;
+      const MAX_SCAFFOLD_LOG_BYTES = 256 * 1024;
+      const MAX_SCAFFOLD_LOG_ENTRY_CHARS = 2000;
+
+      const logs: string[] = [];
+      let retainedLogBytes = 0;
+      const pushLog = (msg: string) => {
+        const normalized = msg.trim();
+        if (!normalized) return;
+        const entry =
+          normalized.length > MAX_SCAFFOLD_LOG_ENTRY_CHARS
+            ? `${normalized.slice(0, MAX_SCAFFOLD_LOG_ENTRY_CHARS)}… [truncated]`
+            : normalized;
+        const entryBytes = Buffer.byteLength(entry, "utf8");
+        logs.push(entry);
+        retainedLogBytes += entryBytes;
+        while (
+          logs.length > MAX_SCAFFOLD_LOG_LINES ||
+          retainedLogBytes > MAX_SCAFFOLD_LOG_BYTES
+        ) {
+          const removed = logs.shift();
+          if (removed !== undefined) {
+            retainedLogBytes -= Buffer.byteLength(removed, "utf8");
+          }
+        }
+        logger.log(`[scaffoldApp] ${entry}`);
+      };
+
+      // Escape HTML special characters for use in HTML attributes and text content
+      const escapeHtml = (str: string): string =>
+        str.replace(
+          /[<>&"]/g,
+          (c) =>
+            c === "<" ? "&lt;"
+            : c === ">" ? "&gt;"
+            : c === "&" ? "&amp;"
+            : "&quot;",
+        );
+
+      // Derive a filesystem-safe slug from the app name
+      const slug = appName
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 64) || `factory-app-${runId}`;
+
+      const sandboxRoot = path.join(app.getPath("userData"), "factory-apps");
+      const destDir = path.join(sandboxRoot, slug);
+
+      // Resolve scaffold source — same path createFromTemplate.ts uses
+      const scaffoldSrc = path.join(__dirname, "..", "..", "scaffold");
+      pushLog(`Scaffold source: ${scaffoldSrc}`);
+      pushLog(`Destination: ${destDir}`);
+
+      try {
+        // Remove any previous scaffold at this path so re-scaffolding is clean
+        try {
+          await rm(destDir, { recursive: true, force: true });
+        } catch {
+          // ignore — directory may not exist yet
+        }
+
+        // Copy scaffold template (skip node_modules — copyDirectoryRecursive already does this)
+        pushLog("Copying scaffold template…");
+        await copyDirectoryRecursive(scaffoldSrc, destDir);
+        pushLog("Template copied.");
+
+        // -----------------------------------------------------------------------
+        // Codemods — patch app name and tagline into key files
+        // -----------------------------------------------------------------------
+
+        // 1. package.json — replace the placeholder package name with the slug
+        const pkgJsonPath = path.join(destDir, "package.json");
+        const pkgJson = await readFile(pkgJsonPath, "utf-8");
+        const updatedPkgJson = pkgJson.replace(
+          /"name":\s*"[^"]*"/,
+          `"name": "${slug}"`,
+        );
+        await writeFile(pkgJsonPath, updatedPkgJson, "utf-8");
+        pushLog("Patched package.json name.");
+
+        // 2. index.html — replace the default <title>
+        const htmlPath = path.join(destDir, "index.html");
+        const htmlContent = await readFile(htmlPath, "utf-8");
+        const updatedHtml = htmlContent.replace(
+          /<title>[^<]*<\/title>/,
+          `<title>${escapeHtml(appName)}</title>`,
+        );
+        await writeFile(htmlPath, updatedHtml, "utf-8");
+        pushLog("Patched index.html title.");
+
+        // 3. src/pages/Index.tsx — replace placeholder heading and sub-text.
+        // Use JSON.stringify to produce safe JS string literals so characters
+        // like `{`, `}`, `$`, and `\` cannot break JSX parsing or
+        // String.replace special sequences.
+        const indexTsxPath = path.join(destDir, "src", "pages", "Index.tsx");
+        const indexTsx = await readFile(indexTsxPath, "utf-8");
+        // JSON.stringify wraps in quotes — strip them for embedding in JSX text
+        const safeAppNameJs = JSON.stringify(appName).slice(1, -1);
+        const safeTaglineJs = JSON.stringify(
+          tagline ?? "Built with Dyad.",
+        ).slice(1, -1);
+        const patchedIndexTsx = indexTsx
+          .replace(
+            /Welcome to Your Blank App/g,
+            () => safeAppNameJs,
+          )
+          .replace(
+            /Start building your amazing project here!/g,
+            () => safeTaglineJs,
+          );
+        await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
+        pushLog("Patched src/pages/Index.tsx content.");
+
+        // -----------------------------------------------------------------------
+        // npm install
+        // -----------------------------------------------------------------------
+        pushLog("Running npm install --legacy-peer-deps…");
+        const SCAFFOLD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+        try {
+          const installResult = await runCommand(
+            "npm",
+            ["install", "--legacy-peer-deps"],
+            { cwd: destDir, timeoutMs: SCAFFOLD_TIMEOUT_MS },
+          );
+          if (installResult.stdout) {
+            for (const line of installResult.stdout.split("\n")) {
+              pushLog(line);
+            }
+          }
+          pushLog("npm install completed.");
+        } catch (installErr) {
+          throw new DyadError(
+            `npm install failed: ${installErr instanceof Error ? installErr.message : String(installErr)}`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // -----------------------------------------------------------------------
+        // npm run build
+        // -----------------------------------------------------------------------
+        pushLog("Running npm run build…");
+        try {
+          const buildResult = await runCommand("npm", ["run", "build"], {
+            cwd: destDir,
+            timeoutMs: SCAFFOLD_TIMEOUT_MS,
+          });
+          if (buildResult.stdout) {
+            for (const line of buildResult.stdout.split("\n")) {
+              pushLog(line);
+            }
+          }
+          pushLog("npm run build completed.");
+        } catch (buildErr) {
+          throw new DyadError(
+            `npm run build failed: ${buildErr instanceof Error ? buildErr.message : String(buildErr)}`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // -----------------------------------------------------------------------
+        // Verify dist/ was produced
+        // -----------------------------------------------------------------------
+        const previewPath = path.join(destDir, "dist");
+        try {
+          const distStat = await stat(previewPath);
+          if (!distStat.isDirectory()) {
+            throw new DyadError(
+              `Build output at "${previewPath}" is not a directory`,
+              DyadErrorKind.ScaffoldFailure,
+            );
+          }
+        } catch (statErr) {
+          if (statErr instanceof DyadError) throw statErr;
+          throw new DyadError(
+            `Build did not produce dist/ at "${previewPath}": ${statErr instanceof Error ? statErr.message : String(statErr)}`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        pushLog(`Preview available at: ${previewPath}`);
+        return { previewPath, logs };
+      } catch (err) {
+        if (err instanceof DyadError) throw err;
+        throw new DyadError(
+          `Scaffold failed for "${appName}": ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.ScaffoldFailure,
+        );
+      }
+    },
+  );
 }
 
 // =============================================================================

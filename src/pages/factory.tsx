@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   type IdeaEvaluationResult,
   type PatternEntry,
@@ -149,6 +149,91 @@ function OutcomesSection({ runId }: { runId: number }) {
         <p className="text-xs text-zinc-600 italic">
           ✦ Row migrated from legacy boolean outcome — exact values unknown.
         </p>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// PR #6 — Scaffold App section — shown inside IdeaCard for BUILD ideas that
+// have been persisted (runId present).  Triggers factory:scaffold-app which
+// copies the scaffold/ template, runs codemods, npm install, and npm run build.
+// =============================================================================
+
+function ScaffoldSection({
+  result,
+}: {
+  result: IdeaEvaluationResult;
+}) {
+  const runId = result.runId;
+
+  const scaffoldMutation = useMutation({
+    mutationKey: queryKeys.factory.scaffold(runId ?? 0),
+    mutationFn: () =>
+      factoryClient.scaffoldApp({
+        runId: runId!,
+        appName: result.name,
+        tagline: result.monetisationAngle ?? undefined,
+      }),
+    // No query invalidation needed — scaffold result is ephemeral
+  });
+
+  if (runId == null || runId <= 0) return null;
+
+  const { data, isPending, isError, error } = scaffoldMutation;
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          Scaffold App
+        </p>
+        {!data && (
+          <button
+            onClick={() => scaffoldMutation.mutate()}
+            disabled={isPending}
+            className="text-xs px-3 py-1.5 rounded-lg bg-indigo-900/50 text-indigo-300 hover:bg-indigo-800/60 disabled:bg-zinc-800 disabled:text-zinc-500 border border-indigo-800 transition-colors"
+          >
+            {isPending ? (
+              <span className="flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full border-2 border-indigo-300/30 border-t-indigo-300 animate-spin" />
+                Scaffolding…
+              </span>
+            ) : (
+              "▶ Scaffold Runnable App"
+            )}
+          </button>
+        )}
+        {data && (
+          <span className="text-xs text-emerald-400">✓ Built</span>
+        )}
+      </div>
+
+      {isError && (
+        <p className="text-xs text-red-400 leading-relaxed">
+          {error instanceof Error ? error.message : "Scaffold failed."}
+        </p>
+      )}
+
+      {data && (
+        <div className="space-y-2">
+          <div className="rounded-md bg-zinc-900 border border-zinc-700 px-3 py-2">
+            <p className="text-xs text-zinc-500 mb-0.5">Preview path</p>
+            <p className="text-xs font-mono text-zinc-200 break-all">
+              {data.previewPath}
+            </p>
+          </div>
+          {data.logs.length > 0 && (
+            <details className="group">
+              <summary className="text-xs text-zinc-600 cursor-pointer hover:text-zinc-400 transition-colors select-none">
+                Build logs ({data.logs.length} lines)
+              </summary>
+              <pre className="mt-2 text-xs text-zinc-500 bg-zinc-950 rounded-md p-3 overflow-auto max-h-40 leading-relaxed whitespace-pre-wrap">
+                {data.logs.join("\n")}
+              </pre>
+            </details>
+          )}
+        </div>
       )}
     </div>
   );
@@ -413,6 +498,11 @@ function IdeaCard({
       {/* PR #5 — Quantitative outcomes (read-only) */}
       {result.runId != null && result.runId > 0 && (
         <OutcomesSection runId={result.runId} />
+      )}
+
+      {/* PR #6 — Scaffold runnable app (BUILD ideas that have been persisted) */}
+      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+        <ScaffoldSection result={result} />
       )}
     </div>
   );

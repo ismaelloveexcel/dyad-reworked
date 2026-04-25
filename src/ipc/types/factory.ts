@@ -267,6 +267,20 @@ export const factoryContracts = {
       outcomes: z.array(QuantitativeLaunchOutcomeSchema),
     }),
   }),
+  // PR #6 — Deterministic scaffolder: copies scaffold/ template, runs codemods,
+  // npm install, npm run build; returns preview path + captured logs.
+  scaffoldApp: defineContract({
+    channel: "factory:scaffold-app",
+    input: z.object({
+      runId: z.number().int().positive(),
+      appName: z.string().min(1),
+      tagline: z.string().optional(),
+    }),
+    output: z.object({
+      previewPath: z.string(), // absolute path to the built dist/ directory
+      logs: z.array(z.string()),
+    }),
+  }),
 } as const;
 
 // =============================================================================
