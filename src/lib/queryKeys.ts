@@ -347,6 +347,7 @@ export const queryKeys = {
     all: ["factory"] as const,
     runs: ["factory", "runs"] as const,
     systemStatus: ["factory", "systemStatus"] as const,
+    outcomes: (runId: number) => ["factory", "outcomes", runId] as const,
   },
 } as const;
 

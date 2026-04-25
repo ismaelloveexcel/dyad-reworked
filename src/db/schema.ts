@@ -301,3 +301,21 @@ export const factoryRuns = sqliteTable("factory_runs", {
     .notNull()
     .default(sql`(unixepoch())`),
 });
+
+// PR #5 — Quantitative launch outcomes (replaces boolean launchOutcome field).
+// One row per measurement event; multiple rows can exist per factory_run.
+// No ingest yet — schema + read path only.
+export const launchOutcomes = sqliteTable("launch_outcomes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  runId: integer("run_id")
+    .notNull()
+    .references(() => factoryRuns.id, { onDelete: "cascade" }),
+  revenueUsd: integer("revenue_usd"), // lifetime revenue in USD cents (null = unknown)
+  conversions: integer("conversions"), // number of paying customers
+  views: integer("views"), // unique page/app views
+  churn30d: integer("churn_30d"), // churned customers in last 30 days
+  source: text("source"), // e.g. "manual", "stripe", "analytics"
+  capturedAt: integer("captured_at", { mode: "timestamp" })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
