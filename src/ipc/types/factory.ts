@@ -251,12 +251,16 @@ export const factoryContracts = {
     output: z.object({ success: z.boolean() }),
   }),
   // PR #1 — Surface missing OpenAI key to renderer for the global banner
+  // PR #8 — Extended with provider + providerKeyPresent for multi-provider routing
   getSystemStatus: defineContract({
     channel: "factory:get-system-status",
     input: z.object({}),
     output: z.object({
       openaiKeyPresent: z.boolean(),
       modelVersion: z.string(),
+      // PR #8 additions
+      provider: z.enum(["openai", "anthropic", "google"]),
+      providerKeyPresent: z.boolean(),
     }),
   }),
   // PR #5 — Read quantitative outcomes for a run (no ingest yet)

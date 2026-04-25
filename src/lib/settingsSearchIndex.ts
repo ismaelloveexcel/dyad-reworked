@@ -40,6 +40,7 @@ export const SETTING_IDS = {
   enableSelectAppFromHomeChatInput:
     "setting-enable-select-app-from-home-chat-input",
   factoryScoreThreshold: "setting-factory-score-threshold",
+  factoryProvider: "setting-factory-provider",
   reset: "setting-reset",
 } as const;
 
@@ -403,6 +404,24 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
       "persist",
       "minimum",
       "filter",
+    ],
+    sectionId: SECTION_IDS.workflow,
+    sectionLabel: "Workflow",
+  },
+  {
+    id: SETTING_IDS.factoryProvider,
+    label: "Factory AI Provider",
+    description:
+      "Choose which AI provider powers the Factory pipeline (OpenAI, Anthropic, or Google).",
+    keywords: [
+      "factory",
+      "provider",
+      "openai",
+      "anthropic",
+      "google",
+      "model",
+      "ai",
+      "routing",
     ],
     sectionId: SECTION_IDS.workflow,
     sectionLabel: "Workflow",

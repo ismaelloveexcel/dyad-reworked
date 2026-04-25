@@ -36,11 +36,22 @@ import {
 const logger = log.scope("factory_handlers");
 
 // =============================================================================
-// Pinned model snapshot (PR #1) — pinning the dated snapshot makes runs
+// Pinned model snapshots (PR #1 / PR #8) — pinning dated snapshots makes runs
 // reproducible across model upgrades. Bump deliberately when re-baselining.
 // =============================================================================
 
 export const OPENAI_MODEL_VERSION = "gpt-4o-mini-2024-07-18";
+export const ANTHROPIC_MODEL_VERSION = "claude-haiku-4-5-20251014";
+export const GOOGLE_MODEL_VERSION = "gemini-2.0-flash-001";
+
+/** PR #8 — Return the pinned model snapshot for the active factory provider. */
+export function getFactoryModelVersion(
+  provider: "openai" | "anthropic" | "google",
+): string {
+  if (provider === "anthropic") return ANTHROPIC_MODEL_VERSION;
+  if (provider === "google") return GOOGLE_MODEL_VERSION;
+  return OPENAI_MODEL_VERSION;
+}
 
 // =============================================================================
 // OpenAI helpers
@@ -149,26 +160,240 @@ async function callOpenAI(prompt: string): Promise<string> {
 }
 
 // =============================================================================
+// PR #8 — Anthropic helpers
+// =============================================================================
+
+// Allow tests to redirect Anthropic calls to a custom endpoint.
+const ANTHROPIC_MESSAGES_URL = (() => {
+  const base = process.env.ANTHROPIC_BASE_URL;
+  if (!base) return "https://api.anthropic.com/v1/messages";
+  return base.replace(/\/$/, "") + "/v1/messages";
+})();
+
+async function callAnthropic(prompt: string): Promise<string> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    throw new DyadError(
+      "ANTHROPIC_API_KEY is not set. Add it to your environment.",
+      DyadErrorKind.MissingApiKey,
+    );
+  }
+
+  logger.log(`[factory] callAnthropic model=${ANTHROPIC_MODEL_VERSION}`);
+
+  let response: Response;
+  try {
+    response = await fetch(ANTHROPIC_MESSAGES_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL_VERSION,
+        max_tokens: 2000,
+        system:
+          "You are an expert app idea evaluator. Respond ONLY with valid JSON — no markdown, no code fences, no commentary.",
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+  } catch (err) {
+    const isAbort =
+      err instanceof Error &&
+      (err.name === "AbortError" || err.message.includes("abort"));
+    if (isAbort) {
+      throw new DyadError(
+        "Anthropic request timed out or was aborted.",
+        DyadErrorKind.AnthropicTimeout,
+      );
+    }
+    throw new DyadError(
+      `Network error calling Anthropic: ${err instanceof Error ? err.message : String(err)}`,
+      DyadErrorKind.External,
+    );
+  }
+
+  if (response.status === 429) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Anthropic rate limit exceeded (429): ${text.slice(0, 200)}`,
+      DyadErrorKind.AnthropicRateLimit,
+    );
+  }
+
+  if (response.status === 503) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Anthropic service unavailable (503): ${text.slice(0, 200)}`,
+      DyadErrorKind.AnthropicRateLimit,
+    );
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Anthropic error ${response.status}: ${text.slice(0, 200)}`,
+      DyadErrorKind.External,
+    );
+  }
+
+  const data = (await response.json()) as {
+    content: { type: string; text: string }[];
+  };
+  const content = data.content?.find((c) => c.type === "text")?.text;
+  if (!content) {
+    throw new DyadError(
+      "Anthropic returned an empty response.",
+      DyadErrorKind.InvalidLlmResponse,
+    );
+  }
+  return content;
+}
+
+// =============================================================================
+// PR #8 — Google AI helpers
+// =============================================================================
+
+// Allow tests to redirect Google calls to a custom endpoint.
+const GOOGLE_BASE_URL = (() => {
+  const base = process.env.GOOGLE_BASE_URL;
+  return base
+    ? base.replace(/\/$/, "")
+    : "https://generativelanguage.googleapis.com";
+})();
+
+async function callGoogle(prompt: string): Promise<string> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  if (!apiKey) {
+    throw new DyadError(
+      "GOOGLE_API_KEY is not set. Add it to your environment.",
+      DyadErrorKind.MissingApiKey,
+    );
+  }
+
+  const url = `${GOOGLE_BASE_URL}/v1beta/models/${GOOGLE_MODEL_VERSION}:generateContent?key=${apiKey}`;
+  logger.log(`[factory] callGoogle model=${GOOGLE_MODEL_VERSION}`);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: {
+          parts: [
+            {
+              text: "You are an expert app idea evaluator. Respond ONLY with valid JSON — no markdown, no code fences, no commentary.",
+            },
+          ],
+        },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0, maxOutputTokens: 2000 },
+      }),
+    });
+  } catch (err) {
+    const isAbort =
+      err instanceof Error &&
+      (err.name === "AbortError" || err.message.includes("abort"));
+    if (isAbort) {
+      throw new DyadError(
+        "Google AI request timed out or was aborted.",
+        DyadErrorKind.GoogleTimeout,
+      );
+    }
+    throw new DyadError(
+      `Network error calling Google AI: ${err instanceof Error ? err.message : String(err)}`,
+      DyadErrorKind.External,
+    );
+  }
+
+  if (response.status === 429) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Google AI rate limit exceeded (429): ${text.slice(0, 200)}`,
+      DyadErrorKind.GoogleRateLimit,
+    );
+  }
+
+  if (response.status === 503) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Google AI service unavailable (503): ${text.slice(0, 200)}`,
+      DyadErrorKind.GoogleRateLimit,
+    );
+  }
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new DyadError(
+      `Google AI error ${response.status}: ${text.slice(0, 200)}`,
+      DyadErrorKind.External,
+    );
+  }
+
+  const data = (await response.json()) as {
+    candidates: { content: { parts: { text: string }[] } }[];
+  };
+  const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!content) {
+    throw new DyadError(
+      "Google AI returned an empty response.",
+      DyadErrorKind.InvalidLlmResponse,
+    );
+  }
+  return content;
+}
+
+// =============================================================================
+// PR #8 — Provider router
+// Dispatches a prompt to the configured factory provider.
+// =============================================================================
+
+function callProvider(
+  provider: "openai" | "anthropic" | "google",
+  prompt: string,
+): Promise<string> {
+  if (provider === "anthropic") return callAnthropic(prompt);
+  if (provider === "google") return callGoogle(prompt);
+  return callOpenAI(prompt);
+}
+
+/** Returns true for rate-limit or timeout errors that are retryable. */
+function isRetryableError(err: unknown): boolean {
+  if (!(err instanceof DyadError)) return false;
+  return (
+    err.kind === DyadErrorKind.OpenAiRateLimit ||
+    err.kind === DyadErrorKind.OpenAiTimeout ||
+    err.kind === DyadErrorKind.AnthropicRateLimit ||
+    err.kind === DyadErrorKind.AnthropicTimeout ||
+    err.kind === DyadErrorKind.GoogleRateLimit ||
+    err.kind === DyadErrorKind.GoogleTimeout
+  );
+}
+
+// =============================================================================
 // Retry wrapper (E5) — retries on 429, 503, and network timeouts
 // Delays: 1s → 3s → 9s (exponential). Does NOT retry on 400/401/invalid JSON.
+// PR #8 — routes to the provider read from settings on each attempt.
 // =============================================================================
 
 async function callWithRetry(prompt: string): Promise<string> {
   const MAX_RETRIES = 3;
   const DELAYS_MS = [1000, 3000, 9000];
   let lastErr: unknown;
+  const provider =
+    (readSettings().factoryProvider as "openai" | "anthropic" | "google") ??
+    "openai";
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await callOpenAI(prompt);
+      return await callProvider(provider, prompt);
     } catch (err) {
       lastErr = err;
-      const retryable =
-        err instanceof DyadError &&
-        (err.kind === DyadErrorKind.OpenAiRateLimit ||
-          err.kind === DyadErrorKind.OpenAiTimeout);
+      const retryable = isRetryableError(err);
       if (!retryable || attempt === MAX_RETRIES) throw err;
       logger.warn(
-        `[factory] OpenAI attempt ${attempt}/${MAX_RETRIES} failed (${err instanceof DyadError ? err.kind : "unknown"}). Retrying in ${DELAYS_MS[attempt - 1]}ms…`,
+        `[factory] ${provider} attempt ${attempt}/${MAX_RETRIES} failed (${err instanceof DyadError ? err.kind : "unknown"}). Retrying in ${DELAYS_MS[attempt - 1]}ms…`,
       );
       await new Promise<void>((resolve) =>
         setTimeout(resolve, DELAYS_MS[attempt - 1]),
@@ -183,13 +408,16 @@ async function callWithRetry(prompt: string): Promise<string> {
 // =============================================================================
 
 // PR #1 — Re-throw classified errors that the renderer must surface to the user
-// (missing API key, rate limits, validation, conflict). Other transient OpenAI
+// (missing API key, rate limits, validation, conflict). Other transient provider
 // failures continue to fall back to the deterministic scorer for resilience.
+// PR #8 — Extended to cover Anthropic and Google rate-limit kinds.
 function isUserVisibleFactoryError(err: unknown): boolean {
   if (!(err instanceof DyadError)) return false;
   return (
     err.kind === DyadErrorKind.MissingApiKey ||
     err.kind === DyadErrorKind.OpenAiRateLimit ||
+    err.kind === DyadErrorKind.AnthropicRateLimit ||
+    err.kind === DyadErrorKind.GoogleRateLimit ||
     err.kind === DyadErrorKind.Validation ||
     err.kind === DyadErrorKind.Conflict
   );
@@ -202,7 +430,7 @@ export function registerFactoryHandlers() {
       return enrichResult(validateIdeaResult(raw, idea));
     } catch (err) {
       if (isUserVisibleFactoryError(err)) throw err;
-      logger.warn("OpenAI unavailable, using fallback scoring:", err);
+      logger.warn("LLM provider unavailable, using fallback scoring:", err);
       return enrichResult(deterministicFallback(idea));
     }
   });
@@ -250,7 +478,7 @@ export function registerFactoryHandlers() {
         return { ideas };
       } catch (err) {
         if (isUserVisibleFactoryError(err)) throw err;
-        logger.warn("OpenAI unavailable, using fallback ideas:", err);
+        logger.warn("LLM provider unavailable, using fallback ideas:", err);
         const ideas = fallbackIdeas().sort((a, b) =>
           b.totalScore !== a.totalScore
             ? b.totalScore - a.totalScore
@@ -332,11 +560,19 @@ export function registerFactoryHandlers() {
       // PR #1 — also persist the pinned model snapshot so we can later
       // diff how scoring drifted across model upgrades.
       // PR #3 — also persist regulatedDomain; detect if not already present.
+      // PR #8 — modelVersion now reflects the active provider's pinned snapshot.
+      const activeProvider =
+        (readSettings().factoryProvider as
+          | "openai"
+          | "anthropic"
+          | "google"
+          | undefined) ?? "openai";
       const enriched: IdeaEvaluationResult = {
         ...idea,
         promptVersion: idea.promptVersion ?? PROMPT_VERSION,
         promptHash: idea.promptHash ?? CURRENT_PROMPT_HASH,
-        modelVersion: idea.modelVersion ?? OPENAI_MODEL_VERSION,
+        modelVersion:
+          idea.modelVersion ?? getFactoryModelVersion(activeProvider),
         regulatedDomain:
           idea.regulatedDomain ?? detectRegulatedDomain(idea.idea),
       };
@@ -535,14 +771,34 @@ export function registerFactoryHandlers() {
   );
 
   // PR #1 — System status: lets the renderer show a banner when the
-  // OpenAI key is missing instead of every Factory call failing in isolation.
-  // Reads `process.env.OPENAI_API_KEY` which is populated by `dotenv.config()`
-  // at startup (see src/main.ts).
+  // active provider's key is missing instead of every Factory call failing.
+  // PR #8 — Extended to include the active provider and whether its key is set.
   createTypedHandler(factoryContracts.getSystemStatus, async () => {
-    const key = process.env.OPENAI_API_KEY;
+    const provider =
+      (readSettings().factoryProvider as
+        | "openai"
+        | "anthropic"
+        | "google"
+        | undefined) ?? "openai";
+
+    const ENV_KEY_MAP: Record<"openai" | "anthropic" | "google", string> = {
+      openai: process.env.OPENAI_API_KEY ?? "",
+      anthropic: process.env.ANTHROPIC_API_KEY ?? "",
+      google: process.env.GOOGLE_API_KEY ?? "",
+    };
+
+    const providerKey = ENV_KEY_MAP[provider];
+    const providerKeyPresent =
+      typeof providerKey === "string" && providerKey.trim().length > 0;
+
+    // Retain openaiKeyPresent for backwards compat with existing renderer code.
+    const openaiKey = process.env.OPENAI_API_KEY ?? "";
     return {
-      openaiKeyPresent: typeof key === "string" && key.trim().length > 0,
-      modelVersion: OPENAI_MODEL_VERSION,
+      openaiKeyPresent:
+        typeof openaiKey === "string" && openaiKey.trim().length > 0,
+      modelVersion: getFactoryModelVersion(provider),
+      provider,
+      providerKeyPresent,
     };
   });
 
