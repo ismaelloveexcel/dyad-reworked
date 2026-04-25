@@ -32,12 +32,23 @@ export const createChatCompletionHandler =
     // The factory IPC handler calls OpenAI with a non-streaming request; we
     // detect it here and return a canned valid response so E2E tests do not
     // depend on a real OpenAI API key.
+    //
+    // Detection uses a combination of signals rather than a single string so
+    // the check stays correct even if minor wording in the system prompt
+    // changes: the system message must mention JSON evaluation AND app ideas,
+    // and the request must be non-streaming with no tc= test-case override.
     // ---------------------------------------------------------------------------
     const systemMessage = messages.find((m: any) => m.role === "system");
     const isFactoryRequest =
+      !stream &&
       systemMessage &&
       typeof systemMessage.content === "string" &&
-      systemMessage.content.includes("You are an expert app idea evaluator");
+      systemMessage.content.includes("app idea evaluator") &&
+      systemMessage.content.includes("valid JSON") &&
+      !(
+        typeof lastMessage?.content === "string" &&
+        lastMessage.content.startsWith("tc=")
+      );
 
     if (isFactoryRequest) {
       // Extract the idea text from the prompt if possible
