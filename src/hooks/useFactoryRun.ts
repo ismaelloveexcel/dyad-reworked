@@ -51,15 +51,27 @@ export function useFactoryRun() {
           const raw = localStorage.getItem(LEGACY_HISTORY_KEY);
           if (raw) {
             const legacy = JSON.parse(raw) as IdeaEvaluationResult[];
-            for (const idea of legacy) {
-              factoryClient.saveRun({ idea }).catch(() => {});
+            if (legacy.length === 0) {
+              localStorage.removeItem(LEGACY_HISTORY_KEY);
+              localStorage.setItem("factory-v3-migrated", "1");
+            } else {
+              const results = await Promise.allSettled(
+                legacy.map((idea) => factoryClient.saveRun({ idea })),
+              );
+              const migrationSucceeded = results.every(
+                (result) => result.status === "fulfilled",
+              );
+              if (migrationSucceeded) {
+                localStorage.removeItem(LEGACY_HISTORY_KEY);
+                localStorage.setItem("factory-v3-migrated", "1");
+              }
             }
-            localStorage.removeItem(LEGACY_HISTORY_KEY);
+          } else {
+            localStorage.setItem("factory-v3-migrated", "1");
           }
         } catch {
           // ignore migration errors
         }
-        localStorage.setItem("factory-v3-migrated", "1");
       }
 
       const { runs } = await factoryClient.listRuns({});
@@ -137,8 +149,20 @@ export function useFactoryRun() {
           .then(({ id, duplicate }) => {
             if (duplicate) {
               setDuplicateWarning({ id, existing: duplicate });
-              // Remove from local state (it's a duplicate of a DB row)
-              setLocalIdeas((prev) => prev.filter((p) => p.name !== idea.name));
+              // Keep the optimistic entry visible; patch it with the existing
+              // run's id so UI controls (status, export) work correctly.
+              setLocalIdeas((prev) =>
+                prev.map((p) =>
+                  p.name === idea.name
+                    ? {
+                        ...p,
+                        runId: id,
+                        runStatus:
+                          duplicate.runStatus ?? ("DECIDED" as RunStatus),
+                      }
+                    : p,
+                ),
+              );
             } else {
               // Inject runId back into the local entry
               setLocalIdeas((prev) =>

@@ -9,12 +9,14 @@ import {
   type PipelineStatus,
   type PipelineEntry,
   type TractionEntry,
+} from "@/core/factory/types";
+import {
   loadPipeline,
   savePipeline,
   loadTraction,
   saveTraction,
-  extractPatterns,
-} from "@/core/factory";
+} from "@/core/factory/storage";
+import { extractPatterns } from "@/core/factory/patterns";
 import { useFactoryRun } from "@/hooks/useFactoryRun";
 
 // Re-export types used by external test files so imports from this module

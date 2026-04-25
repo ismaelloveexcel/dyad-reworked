@@ -1,13 +1,14 @@
 /**
- * @dyad/factory-core
+ * @dyad/factory-core — renderer-safe barrel
  *
- * Barrel export for the headless Factory business logic package.
- * All modules are pure (no Electron, no DB) and safe to import from
- * renderer code, unit tests, and the main-process handlers.
+ * Only exports modules that are safe to load in the renderer process
+ * (types, localStorage helpers, pattern extraction).
+ *
+ * Main-process-only concerns (prompt templates, portfolio parsing, DB
+ * fingerprinting) live in `@/core/factory/main` to keep the renderer bundle
+ * lean and the dependency boundary explicit.
  */
 
 export * from "./types";
 export * from "./storage";
 export * from "./patterns";
-export * from "./expand";
-export * from "./persist";

@@ -28,8 +28,8 @@ import {
   buildPatternContext,
   parsePortfolioResponse,
   enrichResult,
-} from "@/core/factory/expand";
-import { computeFingerprint } from "@/core/factory/persist";
+  computeFingerprint,
+} from "@/core/factory/main";
 
 const logger = log.scope("factory_handlers");
 
