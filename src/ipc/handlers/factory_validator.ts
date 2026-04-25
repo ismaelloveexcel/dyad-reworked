@@ -304,6 +304,21 @@ export function checkNovelty(idea: string): NoveltyFlags {
 }
 
 // ============================================================================
+// Regulated-domain detector (PR #3)
+// Flags ideas touching legal, HR, visa, medical, or financial regulated space.
+// When true, a disclaimer is injected into the build prompt and a UI badge
+// is shown so the builder knows to add appropriate caveats.
+// ============================================================================
+
+// Domain-grouped keywords for clarity and maintainability.
+const REGULATED_DOMAIN_PATTERN =
+  /\b(legal|law|lawsuit|contract|compliance|regulated|visa|immigration|work permit|labour law|employment law|hr|medical|health|diagnosis|prescription|drug|medication|clinical|financial advice|investment advice|tax advice|securities|insurance)\b/;
+
+export function detectRegulatedDomain(idea: string): boolean {
+  return REGULATED_DOMAIN_PATTERN.test(idea.toLowerCase());
+}
+
+// ============================================================================
 // Revenue probability / time-to-revenue estimators
 // ============================================================================
 
@@ -335,6 +350,7 @@ export function generateBuildPrompt(result: {
   idea: string;
   monetisationAngle: string;
   viralTrigger: string;
+  regulatedDomain?: boolean;
 }): string {
   const slug = result.name
     .toLowerCase()
@@ -422,7 +438,19 @@ NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_URL=
 - Test: \`cd apps/${slug} && npm test\`
 
 ## Payment:
-Use Lemon Squeezy hosted checkout only — redirect to NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_URL on purchase click.`;
+Use Lemon Squeezy hosted checkout only — redirect to NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_URL on purchase click.${
+    result.regulatedDomain
+      ? `
+
+## ⚠️ REGULATED DOMAIN — MANDATORY DISCLAIMER REQUIREMENT
+This app touches a regulated domain (legal, HR, visa, medical, or financial).
+You MUST:
+- Display a prominent disclaimer on every screen that shows outputs: "This tool provides general information only and does not constitute legal, medical, financial, or professional advice. Always consult a qualified professional."
+- Add a disclaimer footer component rendered on every page.
+- Never claim accuracy, completeness, or fitness for a specific jurisdiction.
+- Label all outputs as "estimates", "benchmarks", or "general guidance" — never as authoritative.`
+      : ""
+  }`;
 }
 
 // ============================================================================
@@ -471,6 +499,7 @@ export function deterministicFallback(idea: string): IdeaEvaluationResult {
     timeToFirstRevenue: estimateTimeToFirstRevenue(scores),
     region: detectRegion(idea),
     noveltyFlags: checkNovelty(idea),
+    regulatedDomain: detectRegulatedDomain(idea),
   };
 
   if (decision === "BUILD") {
@@ -480,6 +509,7 @@ export function deterministicFallback(idea: string): IdeaEvaluationResult {
       idea,
       monetisationAngle,
       viralTrigger,
+      regulatedDomain: result.regulatedDomain,
     });
   }
 
@@ -570,7 +600,23 @@ export function validateIdeaResult(
     return { ...deterministicFallback(ideaText), fallbackUsed: true };
   }
 
-  return result.data;
+  // PR #3 — inject regulatedDomain based on idea text; LLM never produces this.
+  const isRegulated = detectRegulatedDomain(ideaText);
+  const data = { ...result.data, regulatedDomain: isRegulated };
+  // Only regenerate the build prompt when the idea is regulated, to ensure
+  // the mandatory disclaimer section is present. For non-regulated ideas the
+  // LLM-provided prompt is preserved as-is.
+  if (isRegulated && data.decision === "BUILD") {
+    data.buildPrompt = generateBuildPrompt({
+      name: data.name,
+      buyer: data.buyer,
+      idea: ideaText,
+      monetisationAngle: data.monetisationAngle,
+      viralTrigger: data.viralTrigger,
+      regulatedDomain: true,
+    });
+  }
+  return data;
 }
 
 /**

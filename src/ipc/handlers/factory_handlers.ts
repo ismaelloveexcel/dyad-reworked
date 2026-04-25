@@ -19,7 +19,9 @@ import {
   validateIdeaResult,
   deterministicFallback,
   generateBuildPrompt,
+  detectRegulatedDomain,
 } from "./factory_validator";
+import { readSettings } from "@/main/settings";
 
 const logger = log.scope("factory_handlers");
 
@@ -387,6 +389,17 @@ export function registerFactoryHandlers() {
   // ===========================================================================
 
   createTypedHandler(factoryContracts.saveRun, async (_, { idea }) => {
+    // PR #3 — Quality gate: refuse to persist DECIDED items below the
+    // configured score threshold. Default is 20/40 (set in settings.ts).
+    const settings = readSettings();
+    const threshold = settings.factoryScoreThreshold ?? 20;
+    if (idea.totalScore < threshold) {
+      throw new DyadError(
+        `Idea "${idea.name}" scored ${idea.totalScore}/40 which is strictly below the quality-gate threshold of ${threshold}. Increase the score or lower the threshold in Settings → Workflow.`,
+        DyadErrorKind.QualityGateRejection,
+      );
+    }
+
     // E1 — Deduplication: compute fingerprint, check for collision
     const fp = computeFingerprint(idea);
     try {
@@ -422,11 +435,14 @@ export function registerFactoryHandlers() {
       // E4 — prompt version/hash stored in ideaJson.
       // PR #1 — also persist the pinned model snapshot so we can later
       // diff how scoring drifted across model upgrades.
+      // PR #3 — also persist regulatedDomain; detect if not already present.
       const enriched: IdeaEvaluationResult = {
         ...idea,
         promptVersion: idea.promptVersion ?? PROMPT_VERSION,
         promptHash: idea.promptHash ?? CURRENT_PROMPT_HASH,
         modelVersion: idea.modelVersion ?? OPENAI_MODEL_VERSION,
+        regulatedDomain:
+          idea.regulatedDomain ?? detectRegulatedDomain(idea.idea),
       };
       const result = await db
         .insert(factoryRuns)

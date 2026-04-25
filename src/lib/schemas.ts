@@ -358,6 +358,16 @@ const BaseUserSettingsFields = {
   enableContextCompaction: z.boolean().optional(),
   skipNotificationBanner: z.boolean().optional(),
   enableSelectAppFromHomeChatInput: z.boolean().optional(),
+  // PR #3 — Factory quality gate: minimum totalScore (out of 40) to persist a run.
+  // Constrained to integer [0, 40]. Invalid values fall back to undefined so the
+  // caller's `?? 20` default is used instead of corrupting the entire settings.
+  factoryScoreThreshold: z
+    .number()
+    .int()
+    .min(0)
+    .max(40)
+    .optional()
+    .catch(undefined),
 };
 
 /**

@@ -109,6 +109,8 @@ export const IdeaEvaluationResultSchema = z.object({
   promptHash: z.string().optional(),
   modelVersion: z.string().optional(), // PR #1 — pinned OpenAI model snapshot used for this run
   evaluatedAt: z.number().optional(), // unix ms — injected from createdAt DB column
+  // PR #3 — regulated-domain flag (legal/HR/visa/medical/financial content)
+  regulatedDomain: z.boolean().optional(),
 });
 
 export type IdeaEvaluationResult = z.infer<typeof IdeaEvaluationResultSchema>;

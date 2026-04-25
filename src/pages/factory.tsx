@@ -264,6 +264,14 @@ function IdeaCard({
                 {engineMeta.label}
               </span>
             )}
+            {result.regulatedDomain && (
+              <span
+                className="text-xs font-semibold px-2.5 py-1 rounded-full border text-yellow-300 bg-yellow-950/60 border-yellow-700"
+                title="This idea touches a regulated domain (legal/HR/visa/medical/financial). A mandatory disclaimer has been added to the build prompt."
+              >
+                ⚠ Regulated
+              </span>
+            )}
             <span
               className={`text-xs font-bold px-3 py-1 rounded-full border ${decisionColor(result.decision)}`}
             >
