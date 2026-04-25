@@ -15,6 +15,7 @@ import {
   generateBuildPrompt,
 } from "@/ipc/handlers/factory_validator";
 import type { IdeaEvaluationResult } from "@/ipc/types/factory";
+import { UserSettingsSchema } from "@/lib/schemas";
 
 // ---------------------------------------------------------------------------
 // Minimal localStorage shim for SafeLocalStorage tests
@@ -375,5 +376,109 @@ describe("validateIdeaResult — regulatedDomain", () => {
       "A viral meme generator",
     );
     expect(result.regulatedDomain).toBe(false);
+  });
+
+  it("preserves LLM-provided buildPrompt when idea is non-regulated BUILD", () => {
+    const llmPrompt = "LLM-generated build prompt with lots of detail";
+    const raw = makeRawResult({
+      idea: "Invoice generator for freelancers",
+      decision: "BUILD",
+      buildPrompt: llmPrompt,
+    });
+    const result = validateIdeaResult(raw, "Invoice generator for freelancers");
+    expect(result.regulatedDomain).toBe(false);
+    // The LLM prompt must not be overwritten when the idea is not regulated.
+    expect(result.buildPrompt).toBe(llmPrompt);
+  });
+
+  it("replaces LLM-provided buildPrompt with disclaimer-bearing prompt for regulated BUILD", () => {
+    const llmPrompt = "LLM-generated build prompt without a disclaimer";
+    const raw = makeRawResult({
+      idea: "UAE Labour Law compliance tool for HR",
+      decision: "BUILD",
+      buildPrompt: llmPrompt,
+    });
+    const result = validateIdeaResult(
+      raw,
+      "UAE Labour Law compliance tool for HR",
+    );
+    expect(result.regulatedDomain).toBe(true);
+    // The build prompt must include the mandatory disclaimer section.
+    expect(result.buildPrompt).toContain("REGULATED DOMAIN");
+    // And must NOT be the original LLM prompt.
+    expect(result.buildPrompt).not.toBe(llmPrompt);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #3 — factoryScoreThreshold schema constraint (int [0, 40], .catch)
+// ---------------------------------------------------------------------------
+
+// Minimal required settings object for UserSettingsSchema tests.
+function makeBaseSettings(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    selectedModel: { name: "gpt-4o", provider: "openai" },
+    providerSettings: {},
+    selectedTemplateId: "default",
+    enableAutoUpdate: true,
+    releaseChannel: "stable",
+    ...overrides,
+  };
+}
+
+describe("factoryScoreThreshold schema constraint", () => {
+  it("accepts a valid integer in [0, 40]", () => {
+    const result = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: 20 }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.factoryScoreThreshold).toBe(20);
+  });
+
+  it("accepts 0 (gate off) and 40 (boundary)", () => {
+    const r0 = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: 0 }),
+    );
+    const r40 = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: 40 }),
+    );
+    expect(r0.success).toBe(true);
+    expect(r40.success).toBe(true);
+  });
+
+  it("accepts undefined (optional)", () => {
+    const result = UserSettingsSchema.safeParse(makeBaseSettings());
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect(result.data.factoryScoreThreshold).toBeUndefined();
+  });
+
+  it("falls back to undefined for negative values (schema .catch)", () => {
+    const result = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: -5 }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect(result.data.factoryScoreThreshold).toBeUndefined();
+  });
+
+  it("falls back to undefined for values above 40 (schema .catch)", () => {
+    const result = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: 99 }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect(result.data.factoryScoreThreshold).toBeUndefined();
+  });
+
+  it("falls back to undefined for a float (schema .catch requires int)", () => {
+    const result = UserSettingsSchema.safeParse(
+      makeBaseSettings({ factoryScoreThreshold: 20.5 }),
+    );
+    expect(result.success).toBe(true);
+    if (result.success)
+      expect(result.data.factoryScoreThreshold).toBeUndefined();
   });
 });

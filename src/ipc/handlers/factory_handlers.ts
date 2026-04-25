@@ -395,7 +395,7 @@ export function registerFactoryHandlers() {
     const threshold = settings.factoryScoreThreshold ?? 20;
     if (idea.totalScore < threshold) {
       throw new DyadError(
-        `Idea "${idea.name}" scored ${idea.totalScore}/40 which is strictly below the quality-gate threshold of ${threshold}. Increase the score or lower the threshold in Settings → Factory.`,
+        `Idea "${idea.name}" scored ${idea.totalScore}/40 which is strictly below the quality-gate threshold of ${threshold}. Increase the score or lower the threshold in Settings → Workflow.`,
         DyadErrorKind.QualityGateRejection,
       );
     }

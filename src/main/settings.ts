@@ -49,7 +49,7 @@ const DEFAULT_SETTINGS: UserSettings = {
   autoExpandPreviewPanel: true,
   enableContextCompaction: true,
   // PR #3 — Factory quality gate default: 20/40 (50 %). Ideas scoring below this
-  // are not persisted to the DB. Configurable in Settings → Factory.
+  // are not persisted to the DB. Configurable in Settings → Workflow.
   factoryScoreThreshold: 20,
 };
 

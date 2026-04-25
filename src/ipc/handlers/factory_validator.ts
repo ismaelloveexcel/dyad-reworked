@@ -603,14 +603,17 @@ export function validateIdeaResult(
   // PR #3 — inject regulatedDomain based on idea text; LLM never produces this.
   const isRegulated = detectRegulatedDomain(ideaText);
   const data = { ...result.data, regulatedDomain: isRegulated };
-  if (data.decision === "BUILD" && data.buildPrompt) {
+  // Only regenerate the build prompt when the idea is regulated, to ensure
+  // the mandatory disclaimer section is present. For non-regulated ideas the
+  // LLM-provided prompt is preserved as-is.
+  if (isRegulated && data.decision === "BUILD") {
     data.buildPrompt = generateBuildPrompt({
       name: data.name,
       buyer: data.buyer,
       idea: ideaText,
       monetisationAngle: data.monetisationAngle,
       viralTrigger: data.viralTrigger,
-      regulatedDomain: isRegulated,
+      regulatedDomain: true,
     });
   }
   return data;
