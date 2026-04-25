@@ -310,11 +310,12 @@ export function checkNovelty(idea: string): NoveltyFlags {
 // is shown so the builder knows to add appropriate caveats.
 // ============================================================================
 
+// Domain-grouped keywords for clarity and maintainability.
+const REGULATED_DOMAIN_PATTERN =
+  /\b(legal|law|lawsuit|contract|compliance|regulated|visa|immigration|work permit|labour law|employment law|hr|medical|health|diagnosis|prescription|drug|medication|clinical|financial advice|investment advice|tax advice|securities|insurance)\b/;
+
 export function detectRegulatedDomain(idea: string): boolean {
-  const t = idea.toLowerCase();
-  return /\b(legal|law|lawsuit|contract|compliance|visa|immigration|work permit|labour law|employment law|hr|medical|health|diagnosis|prescription|drug|medication|clinical|financial advice|investment advice|tax advice|securities|insurance|regulated)\b/.test(
-    t,
-  );
+  return REGULATED_DOMAIN_PATTERN.test(idea.toLowerCase());
 }
 
 // ============================================================================
@@ -502,14 +503,13 @@ export function deterministicFallback(idea: string): IdeaEvaluationResult {
   };
 
   if (decision === "BUILD") {
-    const isRegulated = detectRegulatedDomain(idea);
     result.buildPrompt = generateBuildPrompt({
       name: result.name,
       buyer: result.buyer,
       idea,
       monetisationAngle,
       viralTrigger,
-      regulatedDomain: isRegulated,
+      regulatedDomain: result.regulatedDomain,
     });
   }
 

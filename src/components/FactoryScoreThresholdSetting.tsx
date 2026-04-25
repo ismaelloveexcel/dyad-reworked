@@ -34,7 +34,7 @@ const OPTIONS: ThresholdOption[] = [
   },
   {
     value: "20",
-    label: `Default (${DEFAULT_THRESHOLD} / 40)`,
+    label: "Default (20 / 40)",
     description:
       "Ideas scoring below 50 % are not saved. Recommended starting point.",
   },
