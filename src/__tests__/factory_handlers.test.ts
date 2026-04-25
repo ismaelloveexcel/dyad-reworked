@@ -133,6 +133,15 @@ vi.mock("@/db", () => {
       insert: vi.fn().mockImplementation(() => makeChain()),
       delete: vi.fn().mockImplementation(() => makeChain()),
       update: vi.fn().mockImplementation(() => makeChain()),
+      // PR #12 — transaction mock: executes the callback with a tx proxy that
+      // exposes the same chain API so delete+insert inside transaction() work.
+      transaction: vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => {
+        const txProxy = {
+          insert: vi.fn().mockImplementation(() => makeChain()),
+          delete: vi.fn().mockImplementation(() => makeChain()),
+        };
+        return fn(txProxy);
+      }),
     },
   };
 });
@@ -2788,6 +2797,7 @@ describe("factory:ingest-payments", () => {
                 attributes: {
                   status: "paid",
                   total: 2999,
+                  currency: "USD",
                   first_order_item: { product_name: "InvoicePro Pro" },
                   created_at: "2025-01-15T10:00:00Z",
                 },
@@ -2797,6 +2807,7 @@ describe("factory:ingest-payments", () => {
                 attributes: {
                   status: "paid",
                   total: 2999,
+                  currency: "USD",
                   first_order_item: { product_name: "InvoicePro Pro" },
                   created_at: "2025-01-16T10:00:00Z",
                 },
@@ -2820,7 +2831,7 @@ describe("factory:ingest-payments", () => {
       revenueUsdCents: 5998,
       conversions: 2,
     });
-    expect(vi.mocked(dbModule.insert)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dbModule.transaction)).toHaveBeenCalledTimes(1);
   });
 
   it("filters LemonSqueezy orders by fromTimestamp", async () => {
@@ -2839,6 +2850,7 @@ describe("factory:ingest-payments", () => {
                 attributes: {
                   status: "paid",
                   total: 2999,
+                  currency: "USD",
                   first_order_item: { product_name: "Test Product" },
                   created_at: "2020-01-01T00:00:00Z",
                 },
@@ -2927,7 +2939,7 @@ describe("factory:ingest-payments", () => {
       revenueUsdCents: 4999,
       conversions: 1,
     });
-    expect(vi.mocked(dbModule.insert)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dbModule.transaction)).toHaveBeenCalledTimes(1);
   });
 
   it("filters Stripe charges by productName in description", async () => {

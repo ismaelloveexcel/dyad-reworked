@@ -559,8 +559,8 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
             </span>
           ) : (
             <span className="text-zinc-500 italic">
-              No matching orders found. Try saving your API key or adjusting
-              filters.
+              No matching orders found. Try saving your API key and syncing
+              again.
             </span>
           )}
         </div>
@@ -584,7 +584,10 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
               >
                 LemonSqueezy API key
               </label>
-              <p className="text-xs text-zinc-500">
+              <p
+                id="ls-key-help"
+                className="text-xs text-zinc-500"
+              >
                 Generate a key at{" "}
                 <span className="font-mono">
                   app.lemonsqueezy.com → Settings → API
@@ -598,6 +601,7 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
                   value={lsKey}
                   onChange={(e) => setLsKey(e.target.value)}
                   placeholder="eyJ0eXAiOiJKV1QiLC…"
+                  aria-describedby="ls-key-help"
                   className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-yellow-700 transition-colors"
                 />
                 <button
@@ -640,7 +644,10 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
               >
                 Stripe secret key
               </label>
-              <p className="text-xs text-zinc-500">
+              <p
+                id="stripe-key-help"
+                className="text-xs text-zinc-500"
+              >
                 Find your key at{" "}
                 <span className="font-mono">
                   dashboard.stripe.com → Developers → API keys
@@ -656,6 +663,7 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
                   value={stripeKey}
                   onChange={(e) => setStripeKey(e.target.value)}
                   placeholder="sk_live_…"
+                  aria-describedby="stripe-key-help"
                   className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-purple-700 transition-colors"
                 />
                 <button
