@@ -31,6 +31,8 @@ export enum DyadErrorKind {
   FactoryPersistenceFailure = "factory_persistence_failure",
   /** Idea score is below the configured quality-gate threshold; not persisted. */
   QualityGateRejection = "quality_gate_rejection",
+  /** factory:scaffoldApp failed to copy template, run codemods, or build. */
+  ScaffoldFailure = "scaffold_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
