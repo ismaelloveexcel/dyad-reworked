@@ -18,6 +18,8 @@ Rules for extending or modifying the Factory V3 idea-evaluation engine.
 | `factory:update-run-status`     | `updateRunStatus`     | renderer → main | Change the `status` column of a run                                                  |
 | `factory:export-runs`           | `exportRuns`          | renderer → main | Save runs to a JSON file via Electron `dialog.showSaveDialog`                        |
 | `factory:update-launch-outcome` | `updateLaunchOutcome` | renderer → main | Record launch result and persist to both `ideaJson` blob and `launch_outcome` column |
+| `factory:deploy-app`            | `deployApp`           | renderer → main | Deploy scaffolded dist/ to Vercel or Netlify; returns `{ url, provider }`            |
+| `factory:save-netlify-token`    | `saveNetlifyToken`    | renderer → main | Validate and save Netlify personal-access token to encrypted settings                |
 
 All contracts are defined in `src/ipc/types/factory.ts`. The client is auto-generated via `createClient(factoryContracts)`.
 
@@ -156,7 +158,22 @@ The scaffold template (`scaffold/`) ships a brand design system that the scaffol
 
 ---
 
-## Testing
+## One-click Deploy (PR #11)
+
+`factory:deploy-app` deploys the scaffolded Vite app's `dist/` directory to Vercel or Netlify using their respective REST APIs (no CLI required).
+
+| Provider | Token setting        | API base                         | Mechanism                                     |
+| -------- | -------------------- | -------------------------------- | --------------------------------------------- |
+| Vercel   | `vercelAccessToken`  | `https://api.vercel.com`         | `POST /v13/deployments` with inline file data |
+| Netlify  | `netlifyAccessToken` | `https://api.netlify.com/api/v1` | SHA1 digest deploy + per-file PUT uploads     |
+
+- Vercel token is already used by the main Dyad deployment flow and lives in `settings.vercelAccessToken`.
+- Netlify token can be saved via `factory:save-netlify-token` (validated against `/api/v1/user`) and lives in `settings.netlifyAccessToken`.
+- Both tokens are encrypted at rest via `safeStorage`.
+- Deploy errors use `DyadErrorKind.DeployFailure` (excluded from PostHog telemetry).
+- The handler derives the slug from the run's idea name (same algorithm as `scaffoldApp`) and looks for `userData/factory-apps/<slug>/dist/`. Returns `DyadErrorKind.DeployFailure` if `dist/` is not found.
+
+---
 
 - Unit tests: `npx vitest run src/__tests__/factory_validator.test.ts`
 - Smoke test (Node-only): `npm run smoke`
@@ -179,10 +196,10 @@ Generates structured launch assets (elevator pitch, social posts, landing-page c
 
 ### IPC surface
 
-| Channel                     | Input                               | Output                          |
-| --------------------------- | ----------------------------------- | ------------------------------- |
-| `factory:generate-launch-kit` | `{ runId: number }`               | `LaunchKit`                     |
-| `factory:export-launch-kit`  | `{ runId: number; kit: LaunchKit }` | `{ path: string }`              |
+| Channel                       | Input                               | Output             |
+| ----------------------------- | ----------------------------------- | ------------------ |
+| `factory:generate-launch-kit` | `{ runId: number }`                 | `LaunchKit`        |
+| `factory:export-launch-kit`   | `{ runId: number; kit: LaunchKit }` | `{ path: string }` |
 
 `LaunchKit` is defined in `src/ipc/types/factory.ts` (`LaunchKitSchema`).  
 `factory:export-launch-kit` writes Markdown files to `userData/factory-apps/<slug>/launch-kit/` and returns the directory path.
@@ -195,7 +212,7 @@ Generates structured launch assets (elevator pitch, social posts, landing-page c
 
 ### UI integration
 
-`LaunchKitSection` in `src/pages/factory.tsx` is rendered inside `IdeaCard` for BUILD ideas that have a `runId > 0`.  It uses `useMutation` (not `useQuery`) because generation is an explicit user action.
+`LaunchKitSection` in `src/pages/factory.tsx` is rendered inside `IdeaCard` for BUILD ideas that have a `runId > 0`. It uses `useMutation` (not `useQuery`) because generation is an explicit user action.
 
 ### Mock-isolation note for tests
 

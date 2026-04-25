@@ -299,10 +299,162 @@ function ScaffoldSection({
 }
 
 // =============================================================================
-// PR #10 — Launch Kit section — shown inside IdeaCard for BUILD ideas that
-// have been persisted (runId present).  Triggers factory:generate-launch-kit
-// which calls the active LLM provider and returns structured launch assets.
+// PR #11 — Deploy section — shown inside IdeaCard for BUILD ideas that have
+// been scaffolded.  Provides one-click deploy to Vercel (token from settings)
+// or Netlify (token saved inline).  If dist/ is missing the handler returns a
+// clear error asking the user to scaffold first.
 // =============================================================================
+
+function DeploySection({ result }: { result: IdeaEvaluationResult }) {
+  const runId = result.runId;
+  const [netlifyToken, setNetlifyToken] = useState("");
+  const [showNetlifyForm, setShowNetlifyForm] = useState(false);
+
+  const deployMutation = useMutation({
+    mutationKey: queryKeys.factory.deploy(runId ?? 0),
+    mutationFn: (provider: "vercel" | "netlify") =>
+      factoryClient.deployApp({ runId: runId!, provider }),
+  });
+
+  const saveNetlifyTokenMutation = useMutation({
+    mutationFn: (token: string) => factoryClient.saveNetlifyToken({ token }),
+    onSuccess: () => {
+      setShowNetlifyForm(false);
+      setNetlifyToken("");
+    },
+  });
+
+  if (!runId || runId <= 0) return null;
+
+  const { data, isPending, isError, error } = deployMutation;
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          Deploy
+        </p>
+        {data && (
+          <span className="text-xs text-emerald-400">✓ Deployed</span>
+        )}
+      </div>
+
+      {!data && (
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => deployMutation.mutate("vercel")}
+            disabled={isPending}
+            className="text-xs px-3 py-1.5 rounded-lg bg-zinc-900 text-zinc-200 hover:bg-zinc-800 disabled:bg-zinc-800 disabled:text-zinc-500 border border-zinc-700 transition-colors flex items-center gap-1.5"
+          >
+            {isPending && deployMutation.variables === "vercel" ? (
+              <>
+                <span className="w-3 h-3 rounded-full border-2 border-zinc-400/30 border-t-zinc-400 animate-spin" />
+                Deploying…
+              </>
+            ) : (
+              <>▲ Deploy to Vercel</>
+            )}
+          </button>
+          <button
+            onClick={() => deployMutation.mutate("netlify")}
+            disabled={isPending}
+            className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors flex items-center gap-1.5"
+          >
+            {isPending && deployMutation.variables === "netlify" ? (
+              <>
+                <span className="w-3 h-3 rounded-full border-2 border-teal-300/30 border-t-teal-300 animate-spin" />
+                Deploying…
+              </>
+            ) : (
+              <>⬡ Deploy to Netlify</>
+            )}
+          </button>
+        </div>
+      )}
+
+      {isError && (
+        <p className="text-xs text-red-400 leading-relaxed">
+          {error instanceof Error ? error.message : "Deploy failed."}
+        </p>
+      )}
+
+      {data && (
+        <div className="rounded-md bg-zinc-900 border border-zinc-700 px-3 py-2">
+          <p className="text-xs text-zinc-500 mb-0.5">
+            Live URL ({data.provider})
+          </p>
+          <a
+            href={data.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs font-mono text-indigo-300 hover:text-indigo-200 break-all transition-colors"
+          >
+            {data.url}
+          </a>
+        </div>
+      )}
+
+      {/* Netlify personal-access token — inline save form */}
+      <div className="pt-1 border-t border-zinc-800 space-y-2">
+        <button
+          onClick={() => setShowNetlifyForm((v) => !v)}
+          className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          {showNetlifyForm ? "▲ Hide Netlify token" : "⚙ Set Netlify token"}
+        </button>
+        {showNetlifyForm && (
+          <div className="space-y-2">
+            <label
+              htmlFor="netlify-token-input"
+              className="block text-xs text-zinc-400"
+            >
+              Netlify personal access token
+            </label>
+            <p
+              id="netlify-token-help"
+              className="text-xs text-zinc-500"
+            >
+              Generate a PAT at{" "}
+              <span className="font-mono">app.netlify.com → User settings → OAuth</span>
+              {"; "}
+              it should start with <span className="font-mono">netlify_pat_…</span>
+            </p>
+            <div className="flex gap-2 items-center">
+              <input
+                id="netlify-token-input"
+                type="password"
+                value={netlifyToken}
+                onChange={(e) => setNetlifyToken(e.target.value)}
+                placeholder="netlify_pat_…"
+                aria-describedby="netlify-token-help"
+                className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-teal-700 transition-colors"
+              />
+              <button
+                onClick={() => saveNetlifyTokenMutation.mutate(netlifyToken)}
+                disabled={
+                  saveNetlifyTokenMutation.isPending || !netlifyToken.trim()
+                }
+                className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors shrink-0"
+              >
+                {saveNetlifyTokenMutation.isPending ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        )}
+        {saveNetlifyTokenMutation.isError && (
+          <p className="text-xs text-red-400">
+            {saveNetlifyTokenMutation.error instanceof Error
+              ? saveNetlifyTokenMutation.error.message
+              : "Failed to save token."}
+          </p>
+        )}
+        {saveNetlifyTokenMutation.isSuccess && (
+          <p className="text-xs text-teal-400">Netlify token saved.</p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -726,6 +878,11 @@ function IdeaCard({
       {/* PR #6 — Scaffold runnable app (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <ScaffoldSection result={result} />
+      )}
+
+      {/* PR #11 — One-click deploy to Vercel / Netlify (BUILD ideas that have been persisted) */}
+      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+        <DeploySection result={result} />
       )}
 
       {/* PR #10 — Launch kit (BUILD ideas that have been persisted) */}

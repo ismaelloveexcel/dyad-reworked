@@ -24,3 +24,30 @@ export function computeFingerprint(idea: IdeaEvaluationResult): string {
     ),
   );
 }
+
+// =============================================================================
+// Slug — filesystem-safe directory name for factory-apps/<slug>/
+// Shared by scaffoldApp, exportLaunchKit, and deployApp so all three handlers
+// always resolve the same directory for a given run.
+// =============================================================================
+
+/**
+ * Derive a filesystem-safe slug from an idea name and its run id.
+ * The result is used as the subdirectory name inside `userData/factory-apps/`.
+ *
+ * Algorithm (identical across scaffoldApp / exportLaunchKit / deployApp):
+ *   1. Lowercase
+ *   2. Collapse any non-alphanumeric sequence to a single hyphen
+ *   3. Strip leading/trailing hyphens
+ *   4. Truncate to 64 chars
+ *   5. Fall back to `factory-app-<runId>` when the name is blank
+ */
+export function factorySlugFromName(name: string, runId: number): string {
+  return (
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 64) || `factory-app-${runId}`
+  );
+}

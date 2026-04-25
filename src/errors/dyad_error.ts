@@ -43,6 +43,8 @@ export enum DyadErrorKind {
   ScaffoldFailure = "scaffold_failure",
   /** factory:generateLaunchKit failed to generate or export launch assets. */
   LaunchKitFailure = "launch_kit_failure",
+  /** factory:deployApp failed to deploy to Vercel or Netlify. */
+  DeployFailure = "deploy_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -64,6 +66,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.ScaffoldFailure,
   // Launch-kit generation/export errors are user-visible, not bugs
   DyadErrorKind.LaunchKitFailure,
+  // Deploy failures are user-visible (bad token, quota, network), not bugs
+  DyadErrorKind.DeployFailure,
 ]);
 
 /**

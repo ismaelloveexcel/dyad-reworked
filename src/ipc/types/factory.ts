@@ -357,6 +357,26 @@ export const factoryContracts = {
       logs: z.array(z.string()),
     }),
   }),
+  // PR #11 — One-click deploy: push the scaffolded app's dist/ to Vercel or Netlify.
+  // Vercel token is read from settings.vercelAccessToken;
+  // Netlify token is read from settings.netlifyAccessToken.
+  deployApp: defineContract({
+    channel: "factory:deploy-app",
+    input: z.object({
+      runId: z.number().int().positive(),
+      provider: z.enum(["vercel", "netlify"]),
+    }),
+    output: z.object({
+      url: z.string(),
+      provider: z.enum(["vercel", "netlify"]),
+    }),
+  }),
+  // PR #11 — Save Netlify personal-access token to encrypted settings.
+  saveNetlifyToken: defineContract({
+    channel: "factory:save-netlify-token",
+    input: z.object({ token: z.string() }),
+    output: z.void(),
+  }),
 } as const;
 
 // =============================================================================
