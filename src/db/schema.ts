@@ -297,6 +297,8 @@ export const factoryRuns = sqliteTable("factory_runs", {
   promptVersion: text("prompt_version"), // e.g. "v3.2"
   promptHash: text("prompt_hash"), // stableHash of prompt templates
   modelVersion: text("model_version"), // e.g. "gpt-4o-mini-2024-07-18" — pinned model snapshot used for this run
+  // PR #9 — JSON-serialised text-embedding-3-small vector for semantic dedup + novelty scoring
+  embedding: text("embedding"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

@@ -53,6 +53,12 @@ const DEFAULT_SETTINGS: UserSettings = {
   factoryScoreThreshold: 20,
   // PR #8 — Factory provider routing default: "openai".
   factoryProvider: "openai",
+  // PR #9 — Embedding-based novelty/dedup: enabled by default.
+  // When true, saveRun fetches an OpenAI embedding and checks cosine similarity
+  // against stored runs before inserting. Requires OPENAI_API_KEY.
+  factoryEmbeddingDedup: true,
+  // PR #9 — Similarity threshold for semantic dedup: 0.92 by default.
+  factoryEmbeddingSimilarityThreshold: 0.92,
 };
 
 const SETTINGS_FILE = "user-settings.json";

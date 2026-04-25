@@ -507,6 +507,20 @@ function IdeaCard({
                 ⚠ Regulated
               </span>
             )}
+            {result.noveltyScore !== undefined && (
+              <span
+                className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${
+                  result.noveltyScore >= 0.7
+                    ? "text-emerald-400 bg-emerald-950/40 border-emerald-800"
+                    : result.noveltyScore >= 0.4
+                      ? "text-amber-400 bg-amber-950/40 border-amber-800"
+                      : "text-red-400 bg-red-950/40 border-red-800"
+                }`}
+                title={`Novelty score: ${(result.noveltyScore * 100).toFixed(0)}% unique vs your existing idea library`}
+              >
+                ✦ {(result.noveltyScore * 100).toFixed(0)}% Novel
+              </span>
+            )}
             <span
               className={`text-xs font-bold px-3 py-1 rounded-full border ${decisionColor(result.decision)}`}
             >

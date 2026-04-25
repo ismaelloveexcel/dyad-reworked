@@ -21,6 +21,13 @@ const mockDbState = vi.hoisted(() => ({
   insertedId: 1,
 }));
 
+// PR #9 — mock fetchEmbedding so saveRun/getSimilarRuns can run without a
+// real OpenAI embeddings endpoint.  Defaults to a 3-dim unit-ish vector.
+// Tests that need a different vector can call mockFetchEmbedding.mockResolvedValueOnce.
+const mockFetchEmbedding = vi.hoisted(() =>
+  vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+);
+
 // ---------------------------------------------------------------------------
 // Mocks (hoisted by vitest — order matters)
 // ---------------------------------------------------------------------------
@@ -72,6 +79,8 @@ vi.mock("@/db/schema", () => ({
     promptVersion: "promptVersion",
     promptHash: "promptHash",
     modelVersion: "modelVersion",
+    // PR #9 — embedding column
+    embedding: "embedding",
   },
   launchOutcomes: {
     id: "id",
@@ -143,6 +152,12 @@ vi.mock("@/ipc/utils/socket_firewall", () => ({
   runCommand: vi.fn().mockResolvedValue({ stdout: "", stderr: "" }),
 }));
 
+// PR #9 — Mock factory_embeddings so saveRun / getSimilarRuns don't need a
+// real OpenAI embeddings endpoint.
+vi.mock("@/ipc/handlers/factory_embeddings", () => ({
+  fetchEmbedding: mockFetchEmbedding,
+}));
+
 // ---------------------------------------------------------------------------
 // Mock settings so saveRun can read the quality-gate threshold and provider
 // ---------------------------------------------------------------------------
@@ -150,12 +165,18 @@ vi.mock("@/ipc/utils/socket_firewall", () => ({
 const mockSettingsState = vi.hoisted(() => ({
   factoryScoreThreshold: 20 as number | undefined,
   factoryProvider: "openai" as "openai" | "anthropic" | "google" | undefined,
+  // PR #9 — embedding dedup defaults
+  factoryEmbeddingDedup: true as boolean | undefined,
+  factoryEmbeddingSimilarityThreshold: 0.92 as number | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
   readSettings: vi.fn(() => ({
     factoryScoreThreshold: mockSettingsState.factoryScoreThreshold,
     factoryProvider: mockSettingsState.factoryProvider,
+    factoryEmbeddingDedup: mockSettingsState.factoryEmbeddingDedup,
+    factoryEmbeddingSimilarityThreshold:
+      mockSettingsState.factoryEmbeddingSimilarityThreshold,
   })),
 }));
 
@@ -277,6 +298,10 @@ beforeEach(() => {
   mockDbState.insertedId = 1;
   mockSettingsState.factoryScoreThreshold = 20;
   mockSettingsState.factoryProvider = "openai";
+  mockSettingsState.factoryEmbeddingDedup = true;
+  mockSettingsState.factoryEmbeddingSimilarityThreshold = 0.92;
+  // Reset fetchEmbedding to its default implementation
+  mockFetchEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   vi.clearAllMocks();
   // Re-wire createTypedHandler after clearAllMocks (implementation is preserved,
   // but we clear call history). Calling registerFactoryHandlers() re-populates the map.
@@ -1899,5 +1924,354 @@ describe("LAUNCH_KIT_PROMPT", () => {
     expect(prompt).toContain("InvoicePro UAE");
     expect(prompt).toContain("Freelancers in UAE");
     expect(prompt).toContain("deployChecklist");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #9 — Embedding-based novelty / dedup in factory:save-run
+// ---------------------------------------------------------------------------
+
+/** Helper to build a two-call select mock (fingerprint check, then all rows). */
+async function makeTwoSelectMock(
+  fingerprintRows: Record<string, unknown>[],
+  allRows: Record<string, unknown>[],
+) {
+  const { db } = await import("@/db");
+  let callCount = 0;
+  vi.mocked(db.select).mockReset(); // clear any leftover impl from previous test
+  vi.mocked(db.select).mockImplementation(() => {
+    callCount++;
+    function makeChain(
+      rows: Record<string, unknown>[],
+    ): Record<string, unknown> {
+      const chain: Record<string, unknown> = {
+        from: (..._: unknown[]) => chain,
+        where: (..._: unknown[]) => chain,
+        orderBy: (..._: unknown[]) => chain,
+        set: (..._: unknown[]) => chain,
+        values: (..._: unknown[]) => chain,
+        limit: (..._: unknown[]) => Promise.resolve(rows),
+        returning: (..._: unknown[]) =>
+          Promise.resolve([{ id: mockDbState.insertedId }]),
+        // eslint-disable-next-line unicorn/no-thenable
+        then: (
+          resolve: (v: unknown) => unknown,
+          reject?: (e: unknown) => unknown,
+        ) => Promise.resolve(rows).then(resolve, reject),
+      };
+      return chain;
+    }
+    if (callCount === 1) return makeChain(fingerprintRows) as any;
+    return makeChain(allRows) as any;
+  });
+}
+
+/** Resets db.select to the default (mockDbState.rows) implementation. */
+async function resetDbSelect() {
+  const { db } = await import("@/db");
+  vi.mocked(db.select).mockReset();
+  vi.mocked(db.select).mockImplementation((() => {
+    const chain: Record<string, unknown> = {
+      from: (..._: unknown[]) => chain,
+      where: (..._: unknown[]) => chain,
+      orderBy: (..._: unknown[]) => chain,
+      set: (..._: unknown[]) => chain,
+      values: (..._: unknown[]) => chain,
+      limit: (..._: unknown[]) => Promise.resolve(mockDbState.rows),
+      returning: (..._: unknown[]) =>
+        Promise.resolve([{ id: mockDbState.insertedId }]),
+      // eslint-disable-next-line unicorn/no-thenable
+      then: (
+        resolve: (v: unknown) => unknown,
+        reject?: (e: unknown) => unknown,
+      ) => Promise.resolve(mockDbState.rows).then(resolve, reject),
+    };
+    return chain;
+  }) as any);
+}
+
+describe("factory:save-run — PR #9 embedding-based dedup", () => {
+  // Reset db.select between tests so leftover `mockImplementation` closures from
+  // makeTwoSelectMock don't bleed into subsequent tests.
+  beforeEach(async () => {
+    await resetDbSelect();
+  });
+
+  it("attaches noveltyScore=1 when no stored embeddings exist", async () => {
+    // Two selects: fingerprint → [], all rows → []
+    await makeTwoSelectMock([], []);
+    mockDbState.insertedId = 20;
+
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const result = (await handler(mockEvent, { idea: makeIdea() })) as {
+      id: number;
+      duplicate: null;
+    };
+    expect(result.id).toBe(20);
+    expect(result.duplicate).toBeNull();
+  });
+
+  it("returns semantic duplicate when a stored embedding has similarity ≥ threshold", async () => {
+    const existingIdea = makeIdea({ name: "Semantically Similar Idea" });
+    const sharedVec = [0.1, 0.2, 0.3]; // same vector → cosine similarity = 1.0 ≥ 0.92
+
+    // First select (fingerprint check) → empty
+    // Second select (stored embeddings) → row with the matching vector
+    await makeTwoSelectMock(
+      [],
+      [
+        {
+          id: 77,
+          ideaJson: JSON.stringify(existingIdea),
+          status: "DECIDED",
+          embedding: JSON.stringify(sharedVec),
+        },
+      ],
+    );
+
+    // fetchEmbedding returns the same vector → similarity 1.0
+    mockFetchEmbedding.mockResolvedValueOnce(sharedVec);
+
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const result = (await handler(mockEvent, { idea: makeIdea() })) as {
+      id: number;
+      duplicate: { name: string } | null;
+    };
+    expect(result.id).toBe(77);
+    expect(result.duplicate).not.toBeNull();
+    expect(result.duplicate!.name).toBe("Semantically Similar Idea");
+  });
+
+  it("does not flag as semantic duplicate when similarity is below threshold", async () => {
+    const existingIdea = makeIdea({ name: "Different Idea" });
+    // Orthogonal vector → cosine similarity = 0 < 0.92
+    const storedVec = [0, 1, 0];
+    const newVec = [1, 0, 0];
+
+    await makeTwoSelectMock(
+      [],
+      [
+        {
+          id: 10,
+          ideaJson: JSON.stringify(existingIdea),
+          status: "DECIDED",
+          embedding: JSON.stringify(storedVec),
+        },
+      ],
+    );
+    mockDbState.insertedId = 99;
+    mockFetchEmbedding.mockResolvedValueOnce(newVec);
+
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const result = (await handler(mockEvent, { idea: makeIdea() })) as {
+      id: number;
+      duplicate: null;
+    };
+    expect(result.id).toBe(99);
+    expect(result.duplicate).toBeNull();
+  });
+
+  it("skips embedding check and inserts normally when factoryEmbeddingDedup=false", async () => {
+    mockSettingsState.factoryEmbeddingDedup = false;
+    mockDbState.rows = [];
+    mockDbState.insertedId = 55;
+
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const result = (await handler(mockEvent, { idea: makeIdea() })) as {
+      id: number;
+      duplicate: null;
+    };
+    expect(result.id).toBe(55);
+    expect(result.duplicate).toBeNull();
+    // fetchEmbedding should NOT have been called
+    expect(mockFetchEmbedding).not.toHaveBeenCalled();
+  });
+
+  it("falls through to insert when fetchEmbedding throws (non-fatal)", async () => {
+    // fetchEmbedding fails (e.g. network error) → embedding is skipped, insert proceeds
+    mockFetchEmbedding.mockRejectedValueOnce(new Error("network failure"));
+    // Both selects return empty (fingerprint check + all rows)
+    await makeTwoSelectMock([], []);
+    mockDbState.insertedId = 33;
+
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const result = (await handler(mockEvent, { idea: makeIdea() })) as {
+      id: number;
+      duplicate: null;
+    };
+    expect(result.id).toBe(33);
+    expect(result.duplicate).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #9 — factory:get-similar-runs
+// ---------------------------------------------------------------------------
+
+describe("factory:get-similar-runs", () => {
+  beforeEach(async () => {
+    await resetDbSelect();
+  });
+
+  it("returns runs sorted by cosine similarity descending", async () => {
+    const queryVec = [1, 0, 0];
+    const closerVec = [0.9, 0.1, 0]; // higher similarity to queryVec
+    const fartherVec = [0, 0, 1]; // orthogonal → similarity ≈ 0
+
+    const ideaClose = makeIdea({ name: "Close Idea" });
+    const ideaFar = makeIdea({ name: "Far Idea" });
+
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockReset();
+    vi.mocked(db.select).mockImplementationOnce(() => {
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      return makeChain([
+        {
+          id: 1,
+          ideaJson: JSON.stringify(ideaFar),
+          status: "DECIDED",
+          embedding: JSON.stringify(fartherVec),
+        },
+        {
+          id: 2,
+          ideaJson: JSON.stringify(ideaClose),
+          status: "DECIDED",
+          embedding: JSON.stringify(closerVec),
+        },
+      ]) as any;
+    });
+
+    mockFetchEmbedding.mockResolvedValueOnce(queryVec);
+    process.env.OPENAI_API_KEY = "sk-test";
+
+    const handler = capturedHandlers.get("factory:get-similar-runs")!;
+    const result = (await handler(mockEvent, {
+      ideaText: "test idea",
+    })) as {
+      runs: { name: string; similarity: number }[];
+    };
+
+    // Should be sorted by similarity DESC → close idea first
+    expect(result.runs.length).toBe(2);
+    expect(result.runs[0].name).toBe("Close Idea");
+    expect(result.runs[0].similarity).toBeGreaterThan(
+      result.runs[1].similarity,
+    );
+  });
+
+  it("excludes the run matching excludeRunId", async () => {
+    const idea = makeIdea({ name: "Target Idea" });
+    const otherIdea = makeIdea({ name: "Other Idea" });
+
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockReset();
+    vi.mocked(db.select).mockImplementationOnce(() => {
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          orderBy: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      return makeChain([
+        {
+          id: 5,
+          ideaJson: JSON.stringify(idea),
+          status: "DECIDED",
+          embedding: JSON.stringify([0.1, 0.2, 0.3]),
+        },
+        {
+          id: 6,
+          ideaJson: JSON.stringify(otherIdea),
+          status: "DECIDED",
+          embedding: JSON.stringify([0.1, 0.2, 0.3]),
+        },
+      ]) as any;
+    });
+
+    mockFetchEmbedding.mockResolvedValueOnce([0.1, 0.2, 0.3]);
+    process.env.OPENAI_API_KEY = "sk-test";
+
+    const handler = capturedHandlers.get("factory:get-similar-runs")!;
+    const result = (await handler(mockEvent, {
+      ideaText: "test idea",
+      excludeRunId: 5,
+    })) as { runs: { name: string }[] };
+
+    expect(result.runs).toHaveLength(1);
+    expect(result.runs[0].name).toBe("Other Idea");
+  });
+
+  it("returns empty array when no runs have embeddings", async () => {
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockReset();
+    vi.mocked(db.select).mockImplementationOnce(() => {
+      function makeChain(
+        rows: Record<string, unknown>[],
+      ): Record<string, unknown> {
+        const chain: Record<string, unknown> = {
+          from: (..._: unknown[]) => chain,
+          where: (..._: unknown[]) => chain,
+          set: (..._: unknown[]) => chain,
+          values: (..._: unknown[]) => chain,
+          limit: (..._: unknown[]) => Promise.resolve(rows),
+          returning: (..._: unknown[]) => Promise.resolve([{ id: 1 }]),
+          // eslint-disable-next-line unicorn/no-thenable
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(rows).then(resolve, reject),
+        };
+        return chain;
+      }
+      return makeChain([
+        {
+          id: 3,
+          ideaJson: JSON.stringify(makeIdea()),
+          status: "DECIDED",
+          embedding: null, // no embedding stored
+        },
+      ]) as any;
+    });
+
+    mockFetchEmbedding.mockResolvedValueOnce([0.1, 0.2, 0.3]);
+    process.env.OPENAI_API_KEY = "sk-test";
+
+    const handler = capturedHandlers.get("factory:get-similar-runs")!;
+    const result = (await handler(mockEvent, {
+      ideaText: "test idea",
+    })) as { runs: unknown[] };
+
+    expect(result.runs).toHaveLength(0);
   });
 });
