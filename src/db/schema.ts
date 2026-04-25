@@ -296,6 +296,7 @@ export const factoryRuns = sqliteTable("factory_runs", {
   launchOutcome: text("launch_outcome"), // JSON: { launched, revenueGenerated, notes }
   promptVersion: text("prompt_version"), // e.g. "v3.2"
   promptHash: text("prompt_hash"), // stableHash of prompt templates
+  modelVersion: text("model_version"), // e.g. "gpt-4o-mini-2024-07-18" — pinned model snapshot used for this run
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .default(sql`(unixepoch())`),

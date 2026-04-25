@@ -218,6 +218,13 @@
       "when": 1748000000000,
       "tag": "0030_factory_enhancements",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "6",
+      "when": 1777083402924,
+      "tag": "0031_yellow_blindfold",
+      "breakpoints": true
     }
   ]
 }

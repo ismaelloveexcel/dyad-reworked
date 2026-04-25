@@ -13,6 +13,7 @@ import { desc, eq } from "drizzle-orm";
 import log from "electron-log";
 import { dialog, BrowserWindow } from "electron";
 import { writeFile } from "fs/promises";
+import { sendTelemetryException } from "@/ipc/utils/telemetry";
 import {
   stableHash,
   validateIdeaResult,
@@ -21,6 +22,13 @@ import {
 } from "./factory_validator";
 
 const logger = log.scope("factory_handlers");
+
+// =============================================================================
+// Pinned model snapshot (PR #1) — pinning the dated snapshot makes runs
+// reproducible across model upgrades. Bump deliberately when re-baselining.
+// =============================================================================
+
+export const OPENAI_MODEL_VERSION = "gpt-4o-mini-2024-07-18";
 
 // =============================================================================
 // Prompt versioning (E4)
@@ -54,7 +62,7 @@ async function callOpenAI(prompt: string): Promise<string> {
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: OPENAI_MODEL_VERSION,
         temperature: 0,
         seed,
         max_tokens: 2000,
@@ -262,12 +270,26 @@ function computeFingerprint(idea: IdeaEvaluationResult): string {
 // Handler registration
 // =============================================================================
 
+// PR #1 — Re-throw classified errors that the renderer must surface to the user
+// (missing API key, rate limits, validation, conflict). Other transient OpenAI
+// failures continue to fall back to the deterministic scorer for resilience.
+function isUserVisibleFactoryError(err: unknown): boolean {
+  if (!(err instanceof DyadError)) return false;
+  return (
+    err.kind === DyadErrorKind.MissingApiKey ||
+    err.kind === DyadErrorKind.OpenAiRateLimit ||
+    err.kind === DyadErrorKind.Validation ||
+    err.kind === DyadErrorKind.Conflict
+  );
+}
+
 export function registerFactoryHandlers() {
   createTypedHandler(factoryContracts.evaluateIdea, async (_, { idea }) => {
     try {
       const raw = await callWithRetry(EVALUATE_PROMPT(idea));
       return enrichResult(validateIdeaResult(raw, idea));
     } catch (err) {
+      if (isUserVisibleFactoryError(err)) throw err;
       logger.warn("OpenAI unavailable, using fallback scoring:", err);
       return enrichResult(deterministicFallback(idea));
     }
@@ -315,6 +337,7 @@ export function registerFactoryHandlers() {
 
         return { ideas };
       } catch (err) {
+        if (isUserVisibleFactoryError(err)) throw err;
         logger.warn("OpenAI unavailable, using fallback ideas:", err);
         const ideas = fallbackIdeas().sort((a, b) =>
           b.totalScore !== a.totalScore
@@ -328,23 +351,20 @@ export function registerFactoryHandlers() {
 
   // ===========================================================================
   // Generate Portfolio — Dual Engine + Novelty + Pattern Engine
+  // PR #1 — Hard-coded UAE/Salary-Reveal fallback portfolio removed.
+  // Failures now propagate to the renderer instead of silently shipping a
+  // misleading fixed-content portfolio that confused users into thinking
+  // the AI had produced regional advice.
   // ===========================================================================
 
   createTypedHandler(
     factoryContracts.generatePortfolio,
     async (_, { niche, patterns }) => {
       const patternContext = buildPatternContext(patterns ?? []);
-
-      try {
-        const raw = await callWithRetry(
-          GENERATE_PORTFOLIO_PROMPT(niche, patternContext),
-        );
-        const portfolio = parsePortfolioResponse(raw);
-        return portfolio;
-      } catch (err) {
-        logger.warn("OpenAI unavailable, using fallback portfolio:", err);
-        return buildFallbackPortfolio(niche);
-      }
+      const raw = await callWithRetry(
+        GENERATE_PORTFOLIO_PROMPT(niche, patternContext),
+      );
+      return parsePortfolioResponse(raw);
     },
   );
 
@@ -362,27 +382,37 @@ export function registerFactoryHandlers() {
         .where(eq(factoryRuns.fingerprint, fp))
         .limit(1);
       if (existing.length > 0) {
-        // Return the existing run id and parsed idea as the duplicate
+        // PR #1 — Slug/fingerprint collision guard. Previously we silently fell
+        // through to insert when the existing JSON was unparseable, which
+        // overwrote (or duplicated) the running row. We now fail fast: the
+        // caller decides whether to overwrite by deleting the existing row.
+        let dup: IdeaEvaluationResult;
         try {
-          const dup = JSON.parse(existing[0].ideaJson) as IdeaEvaluationResult;
-          return {
-            id: existing[0].id,
-            duplicate: {
-              ...dup,
-              runId: existing[0].id,
-              runStatus: (existing[0].status as RunStatus) ?? "DECIDED",
-            },
-          };
-        } catch {
-          // If parse fails, fall through to insert
+          dup = JSON.parse(existing[0].ideaJson) as IdeaEvaluationResult;
+        } catch (parseErr) {
+          throw new DyadError(
+            `Fingerprint collision with run #${existing[0].id} but its stored JSON is corrupt: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+            DyadErrorKind.Conflict,
+          );
         }
+        return {
+          id: existing[0].id,
+          duplicate: {
+            ...dup,
+            runId: existing[0].id,
+            runStatus: (existing[0].status as RunStatus) ?? "DECIDED",
+          },
+        };
       }
 
-      // E4 — prompt version/hash stored in ideaJson
+      // E4 — prompt version/hash stored in ideaJson.
+      // PR #1 — also persist the pinned model snapshot so we can later
+      // diff how scoring drifted across model upgrades.
       const enriched: IdeaEvaluationResult = {
         ...idea,
         promptVersion: idea.promptVersion ?? PROMPT_VERSION,
         promptHash: idea.promptHash ?? CURRENT_PROMPT_HASH,
+        modelVersion: idea.modelVersion ?? OPENAI_MODEL_VERSION,
       };
       const result = await db
         .insert(factoryRuns)
@@ -392,6 +422,7 @@ export function registerFactoryHandlers() {
           fingerprint: fp,
           promptVersion: enriched.promptVersion,
           promptHash: enriched.promptHash,
+          modelVersion: enriched.modelVersion,
         })
         .returning({ id: factoryRuns.id });
       return { id: result[0].id, duplicate: null };
@@ -411,25 +442,36 @@ export function registerFactoryHandlers() {
         .from(factoryRuns)
         .orderBy(desc(factoryRuns.createdAt))
         .limit(limit ?? 200);
-      const runs = rows
-        .map((row) => {
-          try {
-            const idea = JSON.parse(row.ideaJson) as IdeaEvaluationResult;
-            // Inject DB metadata: runId, runStatus, evaluatedAt
-            return {
-              ...idea,
-              runId: row.id,
-              runStatus: (row.status as RunStatus) ?? "DECIDED",
-              evaluatedAt:
-                row.createdAt instanceof Date
-                  ? row.createdAt.getTime()
-                  : (row.createdAt as number) * 1000,
-            };
-          } catch {
-            return null;
-          }
-        })
-        .filter((r): r is IdeaEvaluationResult => r !== null);
+      const runs: IdeaEvaluationResult[] = [];
+      for (const row of rows) {
+        try {
+          const idea = JSON.parse(row.ideaJson) as IdeaEvaluationResult;
+          // Inject DB metadata: runId, runStatus, evaluatedAt
+          runs.push({
+            ...idea,
+            runId: row.id,
+            runStatus: (row.status as RunStatus) ?? "DECIDED",
+            evaluatedAt:
+              row.createdAt instanceof Date
+                ? row.createdAt.getTime()
+                : (row.createdAt as number) * 1000,
+          });
+        } catch (parseErr) {
+          // PR #1 — Stop silently dropping unparseable rows. Report each
+          // parse failure as a classified DyadError so PostHog sees real
+          // corruption events instead of an empty list. We continue past
+          // the bad row so one corrupt entry can't break the whole UI.
+          const wrapped = new DyadError(
+            `factory_runs row #${row.id} has corrupt ideaJson and was skipped: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`,
+            DyadErrorKind.FactoryPersistenceFailure,
+          );
+          logger.warn(wrapped.message);
+          sendTelemetryException(wrapped, {
+            ipc_channel: "factory:list-runs",
+            run_id: row.id,
+          });
+        }
+      }
       return { runs };
     } catch (err) {
       throw new DyadError(
@@ -565,6 +607,18 @@ export function registerFactoryHandlers() {
       }
     },
   );
+
+  // PR #1 — System status: lets the renderer show a banner when the
+  // OpenAI key is missing instead of every Factory call failing in isolation.
+  // Reads `process.env.OPENAI_API_KEY` which is populated by `dotenv.config()`
+  // at startup (see src/main.ts).
+  createTypedHandler(factoryContracts.getSystemStatus, async () => {
+    const key = process.env.OPENAI_API_KEY;
+    return {
+      openaiKeyPresent: typeof key === "string" && key.trim().length > 0,
+      modelVersion: OPENAI_MODEL_VERSION,
+    };
+  });
 }
 
 // =============================================================================
@@ -801,74 +855,5 @@ function parsePortfolioResponse(raw: string): GeneratePortfolioResponse {
     experimentalIdea,
     portfolioLink,
     fallbackUsed: false,
-  };
-}
-
-// =============================================================================
-// Fallback portfolio (no OpenAI)
-// =============================================================================
-
-function buildFallbackPortfolio(
-  niche: string | undefined,
-): GeneratePortfolioResponse {
-  const suffix = niche ? ` for ${niche}` : "";
-
-  const revenueIdea = deterministicFallback(
-    `UAE Labour Law Termination Risk Scorecard${suffix} — calculates redundancy risk and payout for HR managers based on job grade, emirate, and contract type. Outputs branded PDF report.`,
-  );
-  revenueIdea.engineType = "revenue";
-  revenueIdea.decision = "BUILD";
-  revenueIdea.scores.virality = 3;
-  revenueIdea.scores.monetisation = 5;
-  revenueIdea.scores.buyerClarity = 5;
-  revenueIdea.timeToFirstRevenue = "Fast";
-  revenueIdea.revenueProbability = 5;
-  revenueIdea.buildPrompt = generateBuildPrompt({
-    name: revenueIdea.name,
-    buyer: "UAE HR managers and employment lawyers",
-    idea: revenueIdea.idea,
-    monetisationAngle:
-      "One-time $29 PDF report unlock. Bulk pricing for HR teams.",
-    viralTrigger: "HR managers share the report in LinkedIn HR groups.",
-  });
-
-  const viralIdea = deterministicFallback(
-    `Salary Reveal Card${suffix} — enter your UAE job title, years of experience, and emirate to get an instant peer-comparison card showing if you are underpaid vs. market. Share your card on LinkedIn.`,
-  );
-  viralIdea.engineType = "viral";
-  viralIdea.decision = "BUILD";
-  viralIdea.scores.virality = 5;
-  viralIdea.scores.monetisation = 3;
-  viralIdea.timeToFirstRevenue = "Fast";
-  viralIdea.revenueProbability = 3;
-  viralIdea.buildPrompt = generateBuildPrompt({
-    name: viralIdea.name,
-    buyer: "UAE/GCC professionals seeking salary transparency",
-    idea: viralIdea.idea,
-    monetisationAngle:
-      "Free card, $9 for detailed breakdown report. Upsell to Termination Risk Scorecard.",
-    viralTrigger:
-      "User shares their salary card on LinkedIn — peers click, enter their own data.",
-  });
-
-  const experimentalIdea = deterministicFallback(
-    `GCC Startup Visa Readiness Checker${suffix} — founder answers 10 questions about their business stage, nationality, and target emirate to get a readiness score and roadmap.`,
-  );
-  experimentalIdea.engineType = "experimental";
-  experimentalIdea.decision = "REWORK";
-  experimentalIdea.improvedIdea =
-    "Narrow to UAE specifically (DIFC/ADGM vs mainland). Add regional consultancy upsell. Partner with a visa agency for lead-gen revenue.";
-
-  const portfolioLink = `"${viralIdea.name}" drives viral awareness via LinkedIn sharing → users who share are clearly job-hunting → convert them to "${revenueIdea.name}" which solves the follow-up fear: "What am I owed if I leave?"`;
-
-  revenueIdea.portfolioLink = portfolioLink;
-  viralIdea.portfolioLink = portfolioLink;
-
-  return {
-    revenueIdea,
-    viralIdea,
-    experimentalIdea,
-    portfolioLink,
-    fallbackUsed: true,
   };
 }
