@@ -227,8 +227,10 @@ function ScaffoldSection({
           {BRAND_PALETTES.map((p) => (
             <button
               key={p.id}
+              type="button"
               onClick={() => setSelectedPaletteId(p.id)}
               title={p.label}
+              aria-label={`Brand color: ${p.label}`}
               disabled={isPending}
               className={`w-5 h-5 rounded-full border-2 transition-all ${
                 selectedPaletteId === p.id

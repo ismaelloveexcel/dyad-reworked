@@ -1447,4 +1447,47 @@ describe("factory:scaffold-app", () => {
     expect(output).not.toContain("Welcome to Your Blank App");
     expect(output).not.toContain("Start building your amazing project here!");
   });
+
+  // -------------------------------------------------------------------------
+  // PR #7 — brand.css codemod
+  // -------------------------------------------------------------------------
+
+  it("writes brand.css with generated CSS when primaryColor is provided", async () => {
+    const fsp = await import("fs/promises");
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, {
+      runId: 10,
+      appName: "Brand App",
+      primaryColor: "#4F46E5",
+    });
+    const writeCalls = vi.mocked(fsp.writeFile).mock.calls;
+    const brandWrite = writeCalls.find((c) =>
+      String(c[0]).endsWith("brand.css"),
+    );
+    expect(brandWrite).toBeDefined();
+    const css = String(brandWrite![1]);
+    expect(css).toContain("DYAD:BRAND_CSS");
+    expect(css).toContain("--primary:");
+    expect(css).toContain("--ring:");
+  });
+
+  it("does not throw and logs a warning when primaryColor is invalid", async () => {
+    const fsp = await import("fs/promises");
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    const result = (await handler(mockEvent, {
+      runId: 11,
+      appName: "Bad Color App",
+      primaryColor: "not-a-hex",
+    })) as { previewPath: string; logs: string[] };
+
+    // Should complete successfully (no throw)
+    expect(result.previewPath).toContain("dist");
+    // Warning should appear in the logs
+    expect(result.logs.some((l) => l.includes("Warning"))).toBe(true);
+    // brand.css should NOT have been written (writeFile not called for brand.css)
+    const brandWrite = vi.mocked(fsp.writeFile).mock.calls.find((c) =>
+      String(c[0]).endsWith("brand.css"),
+    );
+    expect(brandWrite).toBeUndefined();
+  });
 });

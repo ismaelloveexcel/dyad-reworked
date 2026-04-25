@@ -1002,7 +1002,7 @@ export function registerFactoryHandlers() {
 
         // -----------------------------------------------------------------------
         // PR #7 — Brand codemod: write brand.css with the chosen primary color.
-        // Falls back silently to the scaffold default if the hex is invalid.
+        // Falls back non-fatally to the scaffold default and logs a warning if the hex is invalid.
         // -----------------------------------------------------------------------
         if (primaryColor) {
           const brandCssPath = path.join(destDir, "src", "brand.css");

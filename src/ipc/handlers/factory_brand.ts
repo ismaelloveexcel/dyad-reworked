@@ -97,7 +97,7 @@ const MAX_DARK_LIGHTNESS = 85;
  * Dark-mode primary: lightness clamped to MAX_DARK_LIGHTNESS for contrast on
  *   dark backgrounds; foreground always near-black.
  *
- * @param primaryHex 6-digit hex color (with or without `#`), e.g. `"#4F46E5"`.
+ * @param primaryHex 3- or 6-digit hex color (with or without `#`), e.g. `"#4F46E5"` or `"#f0a"`.
  */
 export function buildBrandCss(primaryHex: string): string {
   const { h, s, l } = hexToHsl(primaryHex);
