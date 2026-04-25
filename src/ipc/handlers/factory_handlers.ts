@@ -12,7 +12,7 @@ import { factoryRuns, launchOutcomes } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import log from "electron-log";
 import { app, dialog, BrowserWindow } from "electron";
-import { writeFile, readFile } from "fs/promises";
+import { writeFile, readFile, stat, rm } from "fs/promises";
 import path from "node:path";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
 import { copyDirectoryRecursive } from "@/ipc/utils/file_utils";
@@ -618,10 +618,36 @@ export function registerFactoryHandlers() {
   createTypedHandler(
     factoryContracts.scaffoldApp,
     async (_, { runId, appName, tagline }) => {
+      // -----------------------------------------------------------------------
+      // Bounded log buffer — cap at 500 lines / 256 KB to avoid memory bloat
+      // from verbose npm output.
+      // -----------------------------------------------------------------------
+      const MAX_SCAFFOLD_LOG_LINES = 500;
+      const MAX_SCAFFOLD_LOG_BYTES = 256 * 1024;
+      const MAX_SCAFFOLD_LOG_ENTRY_CHARS = 2000;
+
       const logs: string[] = [];
+      let retainedLogBytes = 0;
       const pushLog = (msg: string) => {
-        logs.push(msg);
-        logger.log(`[scaffoldApp] ${msg}`);
+        const normalized = msg.trim();
+        if (!normalized) return;
+        const entry =
+          normalized.length > MAX_SCAFFOLD_LOG_ENTRY_CHARS
+            ? `${normalized.slice(0, MAX_SCAFFOLD_LOG_ENTRY_CHARS)}… [truncated]`
+            : normalized;
+        const entryBytes = Buffer.byteLength(entry, "utf8");
+        logs.push(entry);
+        retainedLogBytes += entryBytes;
+        while (
+          logs.length > MAX_SCAFFOLD_LOG_LINES ||
+          retainedLogBytes > MAX_SCAFFOLD_LOG_BYTES
+        ) {
+          const removed = logs.shift();
+          if (removed !== undefined) {
+            retainedLogBytes -= Buffer.byteLength(removed, "utf8");
+          }
+        }
+        logger.log(`[scaffoldApp] ${entry}`);
       };
 
       // Escape HTML special characters for use in HTML attributes and text content
@@ -651,6 +677,13 @@ export function registerFactoryHandlers() {
       pushLog(`Destination: ${destDir}`);
 
       try {
+        // Remove any previous scaffold at this path so re-scaffolding is clean
+        try {
+          await rm(destDir, { recursive: true, force: true });
+        } catch {
+          // ignore — directory may not exist yet
+        }
+
         // Copy scaffold template (skip node_modules — copyDirectoryRecursive already does this)
         pushLog("Copying scaffold template…");
         await copyDirectoryRecursive(scaffoldSrc, destDir);
@@ -680,14 +713,25 @@ export function registerFactoryHandlers() {
         await writeFile(htmlPath, updatedHtml, "utf-8");
         pushLog("Patched index.html title.");
 
-        // 3. src/pages/Index.tsx — replace placeholder heading and sub-text
+        // 3. src/pages/Index.tsx — replace placeholder heading and sub-text.
+        // Use JSON.stringify to produce safe JS string literals so characters
+        // like `{`, `}`, `$`, and `\` cannot break JSX parsing or
+        // String.replace special sequences.
         const indexTsxPath = path.join(destDir, "src", "pages", "Index.tsx");
         const indexTsx = await readFile(indexTsxPath, "utf-8");
+        // JSON.stringify wraps in quotes — strip them for embedding in JSX text
+        const safeAppNameJs = JSON.stringify(appName).slice(1, -1);
+        const safeTaglineJs = JSON.stringify(
+          tagline ?? "Built with Dyad.",
+        ).slice(1, -1);
         const patchedIndexTsx = indexTsx
-          .replace(/Welcome to Your Blank App/g, escapeHtml(appName))
+          .replace(
+            /Welcome to Your Blank App/g,
+            () => safeAppNameJs,
+          )
           .replace(
             /Start building your amazing project here!/g,
-            tagline ? escapeHtml(tagline) : "Built with Dyad.",
+            () => safeTaglineJs,
           );
         await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
         pushLog("Patched src/pages/Index.tsx content.");
@@ -705,7 +749,7 @@ export function registerFactoryHandlers() {
           );
           if (installResult.stdout) {
             for (const line of installResult.stdout.split("\n")) {
-              if (line.trim()) pushLog(line.trim());
+              pushLog(line);
             }
           }
           pushLog("npm install completed.");
@@ -727,7 +771,7 @@ export function registerFactoryHandlers() {
           });
           if (buildResult.stdout) {
             for (const line of buildResult.stdout.split("\n")) {
-              if (line.trim()) pushLog(line.trim());
+              pushLog(line);
             }
           }
           pushLog("npm run build completed.");
@@ -738,7 +782,26 @@ export function registerFactoryHandlers() {
           );
         }
 
+        // -----------------------------------------------------------------------
+        // Verify dist/ was produced
+        // -----------------------------------------------------------------------
         const previewPath = path.join(destDir, "dist");
+        try {
+          const distStat = await stat(previewPath);
+          if (!distStat.isDirectory()) {
+            throw new DyadError(
+              `Build output at "${previewPath}" is not a directory`,
+              DyadErrorKind.ScaffoldFailure,
+            );
+          }
+        } catch (statErr) {
+          if (statErr instanceof DyadError) throw statErr;
+          throw new DyadError(
+            `Build did not produce dist/ at "${previewPath}": ${statErr instanceof Error ? statErr.message : String(statErr)}`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
         pushLog(`Preview available at: ${previewPath}`);
         return { previewPath, logs };
       } catch (err) {

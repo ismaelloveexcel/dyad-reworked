@@ -272,7 +272,7 @@ export const factoryContracts = {
   scaffoldApp: defineContract({
     channel: "factory:scaffold-app",
     input: z.object({
-      runId: z.number(),
+      runId: z.number().int().positive(),
       appName: z.string().min(1),
       tagline: z.string().optional(),
     }),

@@ -27,6 +27,9 @@ const mockDbState = vi.hoisted(() => ({
 
 vi.mock("electron", () => ({
   ipcMain: { handle: vi.fn() },
+  app: {
+    getPath: vi.fn().mockReturnValue("/mock-user-data"),
+  },
   dialog: {
     showSaveDialog: vi.fn().mockResolvedValue({ canceled: true }),
   },
@@ -126,6 +129,17 @@ vi.mock("@/db", () => {
 
 vi.mock("fs/promises", () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockResolvedValue(""),
+  rm: vi.fn().mockResolvedValue(undefined),
+  stat: vi.fn().mockResolvedValue({ isDirectory: () => true }),
+}));
+
+vi.mock("@/ipc/utils/file_utils", () => ({
+  copyDirectoryRecursive: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/ipc/utils/socket_firewall", () => ({
+  runCommand: vi.fn().mockResolvedValue({ stdout: "", stderr: "" }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1007,5 +1021,178 @@ describe("factory:list-outcomes", () => {
       outcomes: unknown[];
     };
     expect(result.outcomes).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// factory:scaffold-app (PR #6)
+// ---------------------------------------------------------------------------
+
+describe("factory:scaffold-app", () => {
+  // Reset fs/socket mocks before each test in this suite
+  beforeEach(async () => {
+    const fsp = await import("fs/promises");
+    const fileUtils = await import("@/ipc/utils/file_utils");
+    const socketFirewall = await import("@/ipc/utils/socket_firewall");
+    vi.mocked(fsp.rm).mockResolvedValue(undefined);
+    vi.mocked(fsp.readFile).mockResolvedValue("" as any);
+    vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
+    vi.mocked(fsp.stat).mockResolvedValue({ isDirectory: () => true } as any);
+    vi.mocked(fileUtils.copyDirectoryRecursive).mockResolvedValue(undefined);
+    vi.mocked(socketFirewall.runCommand).mockResolvedValue({
+      stdout: "",
+      stderr: "",
+    });
+  });
+
+  it("returns previewPath and logs on a successful scaffold", async () => {
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    const result = (await handler(mockEvent, {
+      runId: 1,
+      appName: "Invoice Pro UAE",
+      tagline: "Fast invoices for UAE freelancers",
+    })) as { previewPath: string; logs: string[] };
+
+    expect(result.previewPath).toContain("dist");
+    expect(Array.isArray(result.logs)).toBe(true);
+    expect(
+      result.logs.some((l) => l.includes("npm install completed")),
+    ).toBe(true);
+    expect(
+      result.logs.some((l) => l.includes("npm run build completed")),
+    ).toBe(true);
+  });
+
+  it("calls copyDirectoryRecursive and runCommand with correct arguments", async () => {
+    const fileUtils = await import("@/ipc/utils/file_utils");
+    const socketFirewall = await import("@/ipc/utils/socket_firewall");
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, {
+      runId: 2,
+      appName: "Test App",
+    });
+
+    expect(vi.mocked(fileUtils.copyDirectoryRecursive)).toHaveBeenCalledOnce();
+    // npm install call
+    expect(vi.mocked(socketFirewall.runCommand)).toHaveBeenCalledWith(
+      "npm",
+      ["install", "--legacy-peer-deps"],
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+    // npm run build call
+    expect(vi.mocked(socketFirewall.runCommand)).toHaveBeenCalledWith(
+      "npm",
+      ["run", "build"],
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+    );
+  });
+
+  it("clears the existing destDir before copying (rm called)", async () => {
+    const fsp = await import("fs/promises");
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, { runId: 3, appName: "Clean Slate App" });
+    expect(vi.mocked(fsp.rm)).toHaveBeenCalledWith(
+      expect.stringContaining("clean-slate-app"),
+      { recursive: true, force: true },
+    );
+  });
+
+  it("throws DyadError(ScaffoldFailure) when npm install fails", async () => {
+    const socketFirewall = await import("@/ipc/utils/socket_firewall");
+    vi.mocked(socketFirewall.runCommand).mockRejectedValueOnce(
+      new Error("ENOENT: npm not found"),
+    );
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 4, appName: "Failing App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws DyadError(ScaffoldFailure) when npm run build fails", async () => {
+    const socketFirewall = await import("@/ipc/utils/socket_firewall");
+    // First call (npm install) succeeds; second call (npm run build) fails
+    vi.mocked(socketFirewall.runCommand)
+      .mockResolvedValueOnce({ stdout: "added 100 packages", stderr: "" })
+      .mockRejectedValueOnce(new Error("TypeScript error TS2345"));
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 5, appName: "Build Fail App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws DyadError(ScaffoldFailure) when dist/ is missing after build", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.stat).mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT: no such file or directory"), {
+        code: "ENOENT",
+      }),
+    );
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 6, appName: "No Dist App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws DyadError(ScaffoldFailure) when dist/ exists but is not a directory", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.stat).mockResolvedValueOnce({
+      isDirectory: () => false,
+    } as any);
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 7, appName: "File Not Dir" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("patches index.html with the app name", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).endsWith("index.html")) {
+        return Promise.resolve(
+          "<title>dyad-generated-app</title>",
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, {
+      runId: 8,
+      appName: "Salary<&>Tool",
+      tagline: "Fast",
+    });
+    // writeFile should have been called with an escaped title
+    const writeCalls = vi.mocked(fsp.writeFile).mock.calls;
+    const htmlWrite = writeCalls.find((c) => String(c[0]).endsWith("index.html"));
+    expect(htmlWrite).toBeDefined();
+    expect(String(htmlWrite![1])).toContain("&lt;");
+    expect(String(htmlWrite![1])).toContain("&amp;");
+  });
+
+  it("uses JSON.stringify-safe substitution for JSX codemod", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).endsWith("Index.tsx")) {
+        return Promise.resolve(
+          "Welcome to Your Blank App\nStart building your amazing project here!",
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, {
+      runId: 9,
+      appName: 'App with "quotes" and $pecial chars',
+      tagline: "Tag with {braces} & more",
+    });
+    const writeCalls = vi.mocked(fsp.writeFile).mock.calls;
+    const tsxWrite = writeCalls.find((c) => String(c[0]).endsWith("Index.tsx"));
+    expect(tsxWrite).toBeDefined();
+    const output = String(tsxWrite![1]);
+    // The $ and { characters should appear literally (escaped via JSON.stringify)
+    expect(output).toContain("$pecial");
+    expect(output).toContain("{braces}");
+    // Should not contain the original placeholders
+    expect(output).not.toContain("Welcome to Your Blank App");
+    expect(output).not.toContain("Start building your amazing project here!");
   });
 });

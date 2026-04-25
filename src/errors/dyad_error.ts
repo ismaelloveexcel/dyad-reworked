@@ -48,6 +48,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.OpenAiRateLimit,
   DyadErrorKind.InvalidLlmResponse,
   DyadErrorKind.QualityGateRejection,
+  // Scaffold failures are user-visible build errors, not bugs — exclude from PostHog
+  DyadErrorKind.ScaffoldFailure,
 ]);
 
 /**
