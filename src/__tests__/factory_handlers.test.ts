@@ -1305,12 +1305,12 @@ describe("factory:scaffold-app", () => {
 
     expect(result.previewPath).toContain("dist");
     expect(Array.isArray(result.logs)).toBe(true);
-    expect(
-      result.logs.some((l) => l.includes("npm install completed")),
-    ).toBe(true);
-    expect(
-      result.logs.some((l) => l.includes("npm run build completed")),
-    ).toBe(true);
+    expect(result.logs.some((l) => l.includes("npm install completed"))).toBe(
+      true,
+    );
+    expect(result.logs.some((l) => l.includes("npm run build completed"))).toBe(
+      true,
+    );
   });
 
   it("calls copyDirectoryRecursive and runCommand with correct arguments", async () => {
@@ -1412,7 +1412,9 @@ describe("factory:scaffold-app", () => {
     });
     // writeFile should have been called with an escaped title
     const writeCalls = vi.mocked(fsp.writeFile).mock.calls;
-    const htmlWrite = writeCalls.find((c) => String(c[0]).endsWith("index.html"));
+    const htmlWrite = writeCalls.find((c) =>
+      String(c[0]).endsWith("index.html"),
+    );
     expect(htmlWrite).toBeDefined();
     expect(String(htmlWrite![1])).toContain("&lt;");
     expect(String(htmlWrite![1])).toContain("&amp;");

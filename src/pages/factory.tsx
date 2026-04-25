@@ -155,9 +155,28 @@ function OutcomesSection({ runId }: { runId: number }) {
 }
 
 // =============================================================================
+// PR #7 — Brand palette presets for the scaffold codemod.
+// Shown as color swatches in ScaffoldSection so the user can pick a brand
+// color before scaffolding.  The chosen hex is forwarded to factory:scaffold-app
+// which writes it into brand.css via buildBrandCss().
+// =============================================================================
+
+const BRAND_PALETTES = [
+  { id: "slate", label: "Slate", primary: "#475569" },
+  { id: "indigo", label: "Indigo", primary: "#4F46E5" },
+  { id: "emerald", label: "Emerald", primary: "#059669" },
+  { id: "violet", label: "Violet", primary: "#7C3AED" },
+  { id: "rose", label: "Rose", primary: "#E11D48" },
+  { id: "amber", label: "Amber", primary: "#D97706" },
+] as const;
+
+type BrandPaletteId = (typeof BRAND_PALETTES)[number]["id"];
+
+// =============================================================================
 // PR #6 — Scaffold App section — shown inside IdeaCard for BUILD ideas that
 // have been persisted (runId present).  Triggers factory:scaffold-app which
 // copies the scaffold/ template, runs codemods, npm install, and npm run build.
+// PR #7 — Extended with brand palette picker.
 // =============================================================================
 
 function ScaffoldSection({
@@ -167,13 +186,21 @@ function ScaffoldSection({
 }) {
   const runId = result.runId;
 
+  // PR #7 — selected brand palette; defaults to indigo
+  const [selectedPaletteId, setSelectedPaletteId] =
+    useState<BrandPaletteId>("indigo");
+
+  const selectedPalette =
+    BRAND_PALETTES.find((p) => p.id === selectedPaletteId) ?? BRAND_PALETTES[1];
+
   const scaffoldMutation = useMutation({
     mutationKey: queryKeys.factory.scaffold(runId ?? 0),
-    mutationFn: () =>
+    mutationFn: ({ primaryColor }: { primaryColor: string }) =>
       factoryClient.scaffoldApp({
         runId: runId!,
         appName: result.name,
         tagline: result.monetisationAngle ?? undefined,
+        primaryColor,
       }),
     // No query invalidation needed — scaffold result is ephemeral
   });
@@ -188,26 +215,55 @@ function ScaffoldSection({
         <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
           Scaffold App
         </p>
-        {!data && (
-          <button
-            onClick={() => scaffoldMutation.mutate()}
-            disabled={isPending}
-            className="text-xs px-3 py-1.5 rounded-lg bg-indigo-900/50 text-indigo-300 hover:bg-indigo-800/60 disabled:bg-zinc-800 disabled:text-zinc-500 border border-indigo-800 transition-colors"
-          >
-            {isPending ? (
-              <span className="flex items-center gap-1.5">
-                <span className="w-3 h-3 rounded-full border-2 border-indigo-300/30 border-t-indigo-300 animate-spin" />
-                Scaffolding…
-              </span>
-            ) : (
-              "▶ Scaffold Runnable App"
-            )}
-          </button>
-        )}
         {data && (
           <span className="text-xs text-emerald-400">✓ Built</span>
         )}
       </div>
+
+      {/* PR #7 — Brand palette picker (hidden once scaffold is complete) */}
+      {!data && (
+        <div className="flex items-center gap-2.5 flex-wrap">
+          <span className="text-xs text-zinc-500 shrink-0">Brand color:</span>
+          {BRAND_PALETTES.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => setSelectedPaletteId(p.id)}
+              title={p.label}
+              disabled={isPending}
+              className={`w-5 h-5 rounded-full border-2 transition-all ${
+                selectedPaletteId === p.id
+                  ? "border-white scale-110"
+                  : "border-transparent opacity-60 hover:opacity-100"
+              } disabled:cursor-not-allowed`}
+              style={{ backgroundColor: p.primary }}
+            />
+          ))}
+          <span
+            className="text-xs text-zinc-400 italic"
+          >
+            {selectedPalette.label}
+          </span>
+        </div>
+      )}
+
+      {!data && (
+        <button
+          onClick={() =>
+            scaffoldMutation.mutate({ primaryColor: selectedPalette.primary })
+          }
+          disabled={isPending}
+          className="text-xs px-3 py-1.5 rounded-lg bg-indigo-900/50 text-indigo-300 hover:bg-indigo-800/60 disabled:bg-zinc-800 disabled:text-zinc-500 border border-indigo-800 transition-colors"
+        >
+          {isPending ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-full border-2 border-indigo-300/30 border-t-indigo-300 animate-spin" />
+              Scaffolding…
+            </span>
+          ) : (
+            "▶ Scaffold Runnable App"
+          )}
+        </button>
+      )}
 
       {isError && (
         <p className="text-xs text-red-400 leading-relaxed">
