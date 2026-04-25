@@ -16,30 +16,23 @@ type FactoryProviderOption = {
   value: "openai" | "anthropic" | "google";
   label: string;
   description: string;
-  envVar: string;
 };
 
 const OPTIONS: FactoryProviderOption[] = [
   {
     value: "openai",
     label: "OpenAI (gpt-4o-mini)",
-    description:
-      "Uses OpenAI GPT-4o-mini. Requires OPENAI_API_KEY in your environment.",
-    envVar: "OPENAI_API_KEY",
+    description: "Uses OpenAI GPT-4o-mini. Requires OPENAI_API_KEY.",
   },
   {
     value: "anthropic",
     label: "Anthropic (claude-haiku)",
-    description:
-      "Uses Anthropic Claude Haiku. Requires ANTHROPIC_API_KEY in your environment.",
-    envVar: "ANTHROPIC_API_KEY",
+    description: "Uses Anthropic Claude Haiku. Requires ANTHROPIC_API_KEY.",
   },
   {
     value: "google",
     label: "Google (gemini-2.0-flash)",
-    description:
-      "Uses Google Gemini 2.0 Flash. Requires GOOGLE_API_KEY in your environment.",
-    envVar: "GOOGLE_API_KEY",
+    description: "Uses Google Gemini 2.0 Flash. Requires GOOGLE_API_KEY.",
   },
 ];
 

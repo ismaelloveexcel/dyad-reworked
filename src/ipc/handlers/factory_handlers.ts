@@ -164,10 +164,13 @@ async function callOpenAI(prompt: string): Promise<string> {
 // =============================================================================
 
 // Allow tests to redirect Anthropic calls to a custom endpoint.
+// Normalize by stripping any trailing "/v1" (or "/v1/") before appending our
+// own path, so both `http://host` and `http://host/v1` work correctly.
 const ANTHROPIC_MESSAGES_URL = (() => {
   const base = process.env.ANTHROPIC_BASE_URL;
   if (!base) return "https://api.anthropic.com/v1/messages";
-  return base.replace(/\/$/, "") + "/v1/messages";
+  const normalized = base.replace(/\/v1\/?$/, "").replace(/\/$/, "");
+  return `${normalized}/v1/messages`;
 })();
 
 async function callAnthropic(prompt: string): Promise<string> {
@@ -272,14 +275,17 @@ async function callGoogle(prompt: string): Promise<string> {
     );
   }
 
-  const url = `${GOOGLE_BASE_URL}/v1beta/models/${GOOGLE_MODEL_VERSION}:generateContent?key=${apiKey}`;
+  const url = `${GOOGLE_BASE_URL}/v1beta/models/${GOOGLE_MODEL_VERSION}:generateContent`;
   logger.log(`[factory] callGoogle model=${GOOGLE_MODEL_VERSION}`);
 
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": apiKey,
+      },
       body: JSON.stringify({
         systemInstruction: {
           parts: [
@@ -375,7 +381,8 @@ function isRetryableError(err: unknown): boolean {
 // =============================================================================
 // Retry wrapper (E5) — retries on 429, 503, and network timeouts
 // Delays: 1s → 3s → 9s (exponential). Does NOT retry on 400/401/invalid JSON.
-// PR #8 — routes to the provider read from settings on each attempt.
+// PR #8 — provider is read from settings once before the retry loop and reused
+// across all attempts to keep a single run consistent.
 // =============================================================================
 
 async function callWithRetry(prompt: string): Promise<string> {
@@ -561,8 +568,9 @@ export function registerFactoryHandlers() {
       // diff how scoring drifted across model upgrades.
       // PR #3 — also persist regulatedDomain; detect if not already present.
       // PR #8 — modelVersion now reflects the active provider's pinned snapshot.
+      // Reuse the `settings` object already read above (quality-gate check).
       const activeProvider =
-        (readSettings().factoryProvider as
+        (settings.factoryProvider as
           | "openai"
           | "anthropic"
           | "google"
