@@ -42,6 +42,7 @@ import {
   parsePortfolioResponse,
   enrichResult,
   computeFingerprint,
+  factorySlugFromName,
 } from "@/core/factory/main";
 import { registerFactoryDeployHandlers } from "./factory_deploy";
 
@@ -1148,12 +1149,7 @@ export function registerFactoryHandlers() {
         );
 
       // Derive a filesystem-safe slug from the app name
-      const slug =
-        appName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 64) || `factory-app-${runId}`;
+      const slug = factorySlugFromName(appName, runId);
 
       const sandboxRoot = path.join(app.getPath("userData"), "factory-apps");
       const destDir = path.join(sandboxRoot, slug);
@@ -1423,12 +1419,7 @@ export function registerFactoryHandlers() {
         );
       }
 
-      const slug =
-        ideaName
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-")
-          .replace(/^-+|-+$/g, "")
-          .slice(0, 64) || `factory-app-${runId}`;
+      const slug = factorySlugFromName(ideaName, runId);
 
       const kitDir = path.join(
         app.getPath("userData"),

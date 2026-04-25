@@ -2505,7 +2505,7 @@ describe("factory:save-netlify-token", () => {
     ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
   });
 
-  it("throws Auth when Netlify API rejects the token", async () => {
+  it("throws Auth when Netlify API rejects the token (401)", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({ ok: false, status: 401 }),
@@ -2514,6 +2514,39 @@ describe("factory:save-netlify-token", () => {
     await expect(
       handler(mockEvent, { token: "bad-token" }),
     ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Netlify API rejects the token (403)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+    );
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await expect(
+      handler(mockEvent, { token: "bad-token" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws DeployFailure when Netlify API returns unexpected non-auth error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    );
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await expect(
+      handler(mockEvent, { token: "some-token" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.DeployFailure });
+  });
+
+  it("throws DeployFailure when network call throws (e.g. offline)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network error")),
+    );
+    const handler = capturedHandlers.get("factory:save-netlify-token")!;
+    await expect(
+      handler(mockEvent, { token: "some-token" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.DeployFailure });
   });
 
   it("saves token to settings when Netlify API accepts the token", async () => {

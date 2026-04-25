@@ -403,23 +403,42 @@ function DeploySection({ result }: { result: IdeaEvaluationResult }) {
           {showNetlifyForm ? "▲ Hide Netlify token" : "⚙ Set Netlify token"}
         </button>
         {showNetlifyForm && (
-          <div className="flex gap-2 items-center">
-            <input
-              type="password"
-              value={netlifyToken}
-              onChange={(e) => setNetlifyToken(e.target.value)}
-              placeholder="netlify_pat_…"
-              className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-teal-700 transition-colors"
-            />
-            <button
-              onClick={() => saveNetlifyTokenMutation.mutate(netlifyToken)}
-              disabled={
-                saveNetlifyTokenMutation.isPending || !netlifyToken.trim()
-              }
-              className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors shrink-0"
+          <div className="space-y-2">
+            <label
+              htmlFor="netlify-token-input"
+              className="block text-xs text-zinc-400"
             >
-              {saveNetlifyTokenMutation.isPending ? "Saving…" : "Save"}
-            </button>
+              Netlify personal access token
+            </label>
+            <p
+              id="netlify-token-help"
+              className="text-xs text-zinc-500"
+            >
+              Generate a PAT at{" "}
+              <span className="font-mono">app.netlify.com → User settings → OAuth</span>
+              {"; "}
+              it should start with <span className="font-mono">netlify_pat_…</span>
+            </p>
+            <div className="flex gap-2 items-center">
+              <input
+                id="netlify-token-input"
+                type="password"
+                value={netlifyToken}
+                onChange={(e) => setNetlifyToken(e.target.value)}
+                placeholder="netlify_pat_…"
+                aria-describedby="netlify-token-help"
+                className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-teal-700 transition-colors"
+              />
+              <button
+                onClick={() => saveNetlifyTokenMutation.mutate(netlifyToken)}
+                disabled={
+                  saveNetlifyTokenMutation.isPending || !netlifyToken.trim()
+                }
+                className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors shrink-0"
+              >
+                {saveNetlifyTokenMutation.isPending ? "Saving…" : "Save"}
+              </button>
+            </div>
           </div>
         )}
         {saveNetlifyTokenMutation.isError && (

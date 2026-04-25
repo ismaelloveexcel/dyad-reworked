@@ -23,6 +23,7 @@ import { readdir, readFile, stat } from "fs/promises";
 import { createHash } from "crypto";
 import path from "node:path";
 import { readSettings, writeSettings } from "@/main/settings";
+import { factorySlugFromName } from "@/core/factory/main";
 import type { IdeaEvaluationResult } from "../types/factory";
 
 const logger = log.scope("factory_deploy");
@@ -31,7 +32,10 @@ const logger = log.scope("factory_deploy");
 // Constants
 // =============================================================================
 
-const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const DEPLOY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — shared by Vercel and Netlify
+
+/** Max concurrent file uploads to Netlify to avoid throttling / FD pressure. */
+const NETLIFY_UPLOAD_CONCURRENCY = 5;
 
 const VERCEL_API_BASE = "https://api.vercel.com";
 const NETLIFY_API_BASE = "https://api.netlify.com/api/v1";
@@ -88,6 +92,47 @@ function isTextFile(relPath: string): boolean {
 }
 
 // =============================================================================
+// Abort-signal helper
+// =============================================================================
+
+/**
+ * Create an AbortController + timer pair.
+ * Call `clear()` in a `finally` block to prevent timer leaks.
+ */
+function withTimeout(ms: number): { signal: AbortSignal; clear: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return { signal: controller.signal, clear: () => clearTimeout(timer) };
+}
+
+// =============================================================================
+// Concurrency pool
+// =============================================================================
+
+/**
+ * Run `tasks` with at most `concurrency` items in flight simultaneously.
+ * Rejects immediately if any task throws (matching Promise.all semantics).
+ */
+async function runWithConcurrency<T>(
+  tasks: Array<() => Promise<T>>,
+  concurrency: number,
+): Promise<T[]> {
+  const results: T[] = [];
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      results[index] = await tasks[index]();
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+// =============================================================================
 // Vercel deploy (inline file upload)
 // =============================================================================
 
@@ -126,9 +171,7 @@ async function deployToVercel(
     });
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DEPLOY_TIMEOUT_MS);
-
+  const { signal, clear } = withTimeout(DEPLOY_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(`${VERCEL_API_BASE}/v13/deployments`, {
@@ -149,10 +192,10 @@ async function deployToVercel(
         },
         target: "production",
       }),
-      signal: controller.signal,
+      signal,
     });
   } finally {
-    clearTimeout(timer);
+    clear();
   }
 
   if (!response.ok) {
@@ -192,6 +235,7 @@ async function deployToVercel(
 
 interface NetlifySite {
   id: string;
+  name?: string;
   ssl_url?: string;
   url?: string;
   subdomain?: string;
@@ -208,23 +252,54 @@ interface NetlifyDeploy {
 
 /**
  * Validate the Netlify token by fetching the current user.
+ *
+ * Returns `false` only when Netlify explicitly rejects the credentials
+ * (HTTP 401 or 403).  Throws a {@link DyadError} with
+ * {@link DyadErrorKind.DeployFailure} for any other HTTP status or network
+ * error, so the caller can surface a "check your connection and retry"
+ * message rather than the misleading "invalid token" message.
  */
 async function validateNetlifyToken(token: string): Promise<boolean> {
+  const { signal, clear } = withTimeout(DEPLOY_TIMEOUT_MS);
   try {
     const response = await fetch(`${NETLIFY_API_BASE}/user`, {
       headers: { Authorization: `Bearer ${token}` },
+      signal,
     });
-    return response.ok;
-  } catch {
-    return false;
+
+    if (response.status === 401 || response.status === 403) {
+      return false;
+    }
+
+    if (response.ok) {
+      return true;
+    }
+
+    throw new DyadError(
+      `Unable to validate Netlify token right now (Netlify API returned ${response.status}). Please try again.`,
+      DyadErrorKind.DeployFailure,
+    );
+  } catch (err) {
+    if (err instanceof DyadError) throw err;
+    throw new DyadError(
+      `Unable to reach Netlify to validate the token. Please check your network connection and try again.`,
+      DyadErrorKind.DeployFailure,
+    );
+  } finally {
+    clear();
   }
 }
 
 /**
  * Deploy a static directory to Netlify using the REST API.
- * 1. Create a new site with a unique name.
+ *
+ * 1. Create (or reuse) a site with a deterministic name `<slug>-<runId>`.
+ *    On site-name conflict the existing site is reused so retries are
+ *    idempotent.
  * 2. POST file digest map to start the deploy.
- * 3. Upload files that Netlify marks as required.
+ * 3. Upload files that Netlify marks as required (max {@link NETLIFY_UPLOAD_CONCURRENCY}
+ *    concurrent connections to avoid throttling).
+ *
  * Returns the HTTPS site URL.
  */
 async function deployToNetlify(
@@ -233,7 +308,8 @@ async function deployToNetlify(
   runId: number,
   token: string,
 ): Promise<string> {
-  logger.log(`[netlify] deploying ${distDir} as "${slug}-${runId}"`);
+  const siteName = `${slug}-${runId}`;
+  logger.log(`[netlify] deploying ${distDir} as "${siteName}"`);
 
   const fileMap = await collectFiles(distDir);
   if (fileMap.size === 0) {
@@ -244,7 +320,7 @@ async function deployToNetlify(
   }
 
   // Compute SHA1 digest for each file (Netlify content-addressing)
-  const fileDigests = new Map<string, string>(); // relPath → sha1
+  const fileDigests = new Map<string, string>(); // "/" + relPath → sha1
   for (const [relPath, content] of fileMap) {
     fileDigests.set(
       "/" + relPath,
@@ -252,29 +328,66 @@ async function deployToNetlify(
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Step 1 — Create site
-  // -------------------------------------------------------------------------
-  const siteName = `${slug}-${runId}`;
+  const authHeader = { Authorization: `Bearer ${token}` } as const;
 
-  const siteResponse = await fetch(`${NETLIFY_API_BASE}/sites`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ name: siteName }),
-  });
+  // -------------------------------------------------------------------------
+  // Step 1 — Create site (idempotent: reuse on name conflict)
+  // -------------------------------------------------------------------------
+  let site: NetlifySite;
+  {
+    const { signal, clear } = withTimeout(DEPLOY_TIMEOUT_MS);
+    let siteResponse: Response;
+    try {
+      siteResponse = await fetch(`${NETLIFY_API_BASE}/sites`, {
+        method: "POST",
+        headers: { ...authHeader, "Content-Type": "application/json" },
+        body: JSON.stringify({ name: siteName }),
+        signal,
+      });
+    } finally {
+      clear();
+    }
 
-  if (!siteResponse.ok) {
-    const errorBody = await siteResponse.text().catch(() => "(no body)");
-    throw new DyadError(
-      `Failed to create Netlify site: ${siteResponse.status} ${errorBody}`,
-      DyadErrorKind.DeployFailure,
-    );
+    if (siteResponse.ok) {
+      site = (await siteResponse.json()) as NetlifySite;
+    } else {
+      // Name may already be taken (e.g. previous deploy attempt failed after
+      // site creation). Attempt to look it up and reuse.
+      const createErrorBody = await siteResponse.text().catch(() => "(no body)");
+
+      const { signal: listSignal, clear: listClear } = withTimeout(DEPLOY_TIMEOUT_MS);
+      let listResponse: Response;
+      try {
+        listResponse = await fetch(`${NETLIFY_API_BASE}/sites`, {
+          headers: authHeader,
+          signal: listSignal,
+        });
+      } finally {
+        listClear();
+      }
+
+      if (!listResponse.ok) {
+        const listErrorBody = await listResponse.text().catch(() => "(no body)");
+        throw new DyadError(
+          `Failed to create Netlify site: ${siteResponse.status} ${createErrorBody}. Failed to list existing sites: ${listResponse.status} ${listErrorBody}`,
+          DyadErrorKind.DeployFailure,
+        );
+      }
+
+      const allSites = (await listResponse.json()) as NetlifySite[];
+      const existing = allSites.find((s) => s.name === siteName);
+      if (!existing) {
+        throw new DyadError(
+          `Failed to create Netlify site: ${siteResponse.status} ${createErrorBody}`,
+          DyadErrorKind.DeployFailure,
+        );
+      }
+      logger.log(
+        `[netlify] Reusing existing site "${siteName}" (${existing.id}) after create conflict`,
+      );
+      site = existing;
+    }
   }
-
-  const site = (await siteResponse.json()) as NetlifySite;
 
   // -------------------------------------------------------------------------
   // Step 2 — Create deploy with file digest map
@@ -282,41 +395,47 @@ async function deployToNetlify(
   const filesObj: Record<string, string> = {};
   for (const [p, sha] of fileDigests) filesObj[p] = sha;
 
-  const deployResponse = await fetch(
-    `${NETLIFY_API_BASE}/sites/${site.id}/deploys`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ files: filesObj }),
-    },
-  );
+  let deploy: NetlifyDeploy;
+  {
+    const { signal, clear } = withTimeout(DEPLOY_TIMEOUT_MS);
+    let deployResponse: Response;
+    try {
+      deployResponse = await fetch(
+        `${NETLIFY_API_BASE}/sites/${site.id}/deploys`,
+        {
+          method: "POST",
+          headers: { ...authHeader, "Content-Type": "application/json" },
+          body: JSON.stringify({ files: filesObj }),
+          signal,
+        },
+      );
+    } finally {
+      clear();
+    }
 
-  if (!deployResponse.ok) {
-    const errorBody = await deployResponse.text().catch(() => "(no body)");
-    throw new DyadError(
-      `Failed to start Netlify deploy: ${deployResponse.status} ${errorBody}`,
-      DyadErrorKind.DeployFailure,
-    );
-  }
+    if (!deployResponse.ok) {
+      const errorBody = await deployResponse.text().catch(() => "(no body)");
+      throw new DyadError(
+        `Failed to start Netlify deploy: ${deployResponse.status} ${errorBody}`,
+        DyadErrorKind.DeployFailure,
+      );
+    }
 
-  const deploy = (await deployResponse.json()) as NetlifyDeploy;
-
-  if (deploy.error_message) {
-    throw new DyadError(
-      `Netlify deploy error: ${deploy.error_message}`,
-      DyadErrorKind.DeployFailure,
-    );
+    deploy = (await deployResponse.json()) as NetlifyDeploy;
+    if (deploy.error_message) {
+      throw new DyadError(
+        `Netlify deploy error: ${deploy.error_message}`,
+        DyadErrorKind.DeployFailure,
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
-  // Step 3 — Upload required files
+  // Step 3 — Upload required files (bounded concurrency)
   // -------------------------------------------------------------------------
   const required = new Set(deploy.required ?? []);
-  const uploadPromises: Array<Promise<void>> = [];
 
+  const uploadTasks: Array<() => Promise<void>> = [];
   for (const [relPath, content] of fileMap) {
     const sha = fileDigests.get("/" + relPath);
     if (!sha || !required.has(sha)) continue;
@@ -327,36 +446,45 @@ async function deployToNetlify(
       .map((segment) => encodeURIComponent(segment))
       .join("/");
 
-    uploadPromises.push(
-      (async () => {
-        const uploadResponse = await fetch(
+    uploadTasks.push(async () => {
+      const { signal, clear } = withTimeout(DEPLOY_TIMEOUT_MS);
+      let uploadResponse: Response;
+      try {
+        uploadResponse = await fetch(
           `${NETLIFY_API_BASE}/deploys/${deploy.id}/files/${encodedPath}`,
           {
             method: "PUT",
             headers: {
-              Authorization: `Bearer ${token}`,
+              ...authHeader,
               "Content-Type": "application/octet-stream",
             },
             body: content.buffer.slice(
               content.byteOffset,
               content.byteOffset + content.byteLength,
             ) as ArrayBuffer,
+            signal,
           },
         );
-        if (!uploadResponse.ok) {
-          const errorBody = await uploadResponse
-            .text()
-            .catch(() => "(no body)");
-          throw new DyadError(
-            `Failed to upload file "${relPath}": ${uploadResponse.status} ${errorBody}`,
-            DyadErrorKind.DeployFailure,
-          );
-        }
-      })(),
-    );
+      } finally {
+        clear();
+      }
+
+      if (!uploadResponse.ok) {
+        const errorBody = await uploadResponse.text().catch(() => "(no body)");
+        throw new DyadError(
+          `Failed to upload file "${relPath}": ${uploadResponse.status} ${errorBody}`,
+          DyadErrorKind.DeployFailure,
+        );
+      }
+    });
   }
 
-  await Promise.all(uploadPromises);
+  if (uploadTasks.length > 0) {
+    logger.log(
+      `[netlify] uploading ${uploadTasks.length} required file(s) (concurrency ${NETLIFY_UPLOAD_CONCURRENCY})`,
+    );
+    await runWithConcurrency(uploadTasks, NETLIFY_UPLOAD_CONCURRENCY);
+  }
 
   // Prefer ssl_url → url → fallback
   const siteUrl =
@@ -369,20 +497,6 @@ async function deployToNetlify(
 
   logger.log(`[netlify] deployed: ${siteUrl}`);
   return siteUrl;
-}
-
-// =============================================================================
-// Derive slug from idea name (same algo as scaffoldApp)
-// =============================================================================
-
-function ideaNameToSlug(name: string, runId: number): string {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 64) || `factory-app-${runId}`
-  );
 }
 
 // =============================================================================
@@ -421,7 +535,7 @@ export function registerFactoryDeployHandlers(): void {
         );
       }
 
-      const slug = ideaNameToSlug(ideaName, runId);
+      const slug = factorySlugFromName(ideaName, runId);
       const distDir = path.join(
         app.getPath("userData"),
         "factory-apps",
