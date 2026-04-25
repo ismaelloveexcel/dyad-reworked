@@ -41,6 +41,13 @@ export const PROMPT_VERSION = "v3.2";
 // OpenAI helpers
 // =============================================================================
 
+// Allow tests (and self-hosted deployments) to redirect OpenAI calls to a
+// custom endpoint — e.g. the fake-llm-server used in E2E tests.
+// When OPENAI_BASE_URL is unset, the production OpenAI endpoint is used.
+const OPENAI_CHAT_COMPLETIONS_URL = process.env.OPENAI_BASE_URL
+  ? `${process.env.OPENAI_BASE_URL.replace(/\/$/, "")}/v1/chat/completions`
+  : "https://api.openai.com/v1/chat/completions";
+
 async function callOpenAI(prompt: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
@@ -55,7 +62,7 @@ async function callOpenAI(prompt: string): Promise<string> {
 
   let response: Response;
   try {
-    response = await fetch("https://api.openai.com/v1/chat/completions", {
+    response = await fetch(OPENAI_CHAT_COMPLETIONS_URL, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

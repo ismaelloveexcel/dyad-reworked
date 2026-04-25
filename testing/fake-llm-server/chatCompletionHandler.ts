@@ -27,6 +27,70 @@ export const createChatCompletionHandler =
       });
     }
 
+    // ---------------------------------------------------------------------------
+    // Factory handler: return valid factory JSON for evaluate-idea prompts.
+    // The factory IPC handler calls OpenAI with a non-streaming request; we
+    // detect it here and return a canned valid response so E2E tests do not
+    // depend on a real OpenAI API key.
+    // ---------------------------------------------------------------------------
+    const systemMessage = messages.find((m: any) => m.role === "system");
+    const isFactoryRequest =
+      systemMessage &&
+      typeof systemMessage.content === "string" &&
+      systemMessage.content.includes("You are an expert app idea evaluator");
+
+    if (isFactoryRequest) {
+      // Extract the idea text from the prompt if possible
+      const userMsg = messages.find((m: any) => m.role === "user");
+      const ideaMatch =
+        typeof userMsg?.content === "string"
+          ? userMsg.content.match(
+              /Evaluate this app idea for a solo developer: "([^"]+)"/,
+            )
+          : null;
+      const ideaText = ideaMatch
+        ? ideaMatch[1]
+        : "Salary benchmark tool for UAE professionals";
+
+      const factoryResponse = JSON.stringify({
+        idea: ideaText,
+        name: "Fake Factory Tool",
+        buyer: "Test buyers",
+        scores: {
+          buyerClarity: 4,
+          painUrgency: 4,
+          marketExistence: 3,
+          differentiation: 3,
+          replaceability: 3,
+          virality: 3,
+          monetisation: 4,
+          buildSimplicity: 4,
+        },
+        totalScore: 28,
+        decision: "BUILD",
+        reason: "Fake evaluation produced by the test fake-llm-server.",
+        improvedIdea: "",
+        buildPrompt: "Build the fake factory tool here.",
+        monetisationAngle: "One-time payment",
+        viralTrigger: "Share your score",
+        fallbackUsed: false,
+      });
+
+      return res.json({
+        id: `chatcmpl-factory-${Date.now()}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: "fake-model",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: factoryResponse },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    }
+
     // Check for local-agent fixture requests (tc=local-agent/*)
     // We need to check ALL user messages, not just the last one, because
     // outer loop follow-up requests inject a todo reminder as the last user message.
