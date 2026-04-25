@@ -487,7 +487,6 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
   });
 
   const ingestMutation = useMutation({
-    mutationKey: queryKeys.factory.payments(runId ?? 0),
     mutationFn: (provider: "lemonsqueezy" | "stripe") =>
       factoryClient.ingestPayments({ runId: runId!, provider }),
   });

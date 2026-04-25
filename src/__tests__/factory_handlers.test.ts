@@ -65,6 +65,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
     ...actual,
     eq: vi.fn((_col: unknown, _val: unknown) => "eq-predicate"),
     desc: vi.fn((_col: unknown) => "desc-order"),
+    and: vi.fn((..._args: unknown[]) => "and-predicate"),
   };
 });
 

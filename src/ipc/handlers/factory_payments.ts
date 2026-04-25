@@ -16,7 +16,7 @@ import { factoryContracts } from "../types/factory";
 import { DyadError, DyadErrorKind } from "@/errors/dyad_error";
 import { db } from "@/db";
 import { launchOutcomes } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import log from "electron-log";
 import { readSettings, writeSettings } from "@/main/settings";
 
@@ -344,7 +344,13 @@ export function registerFactoryPaymentsHandlers(): void {
         }
 
         for (const o of orders) {
-          revenueUsdCents += o.attributes.total ?? 0;
+          const total = o.attributes.total;
+          if (total == null) {
+            logger.warn(
+              `[factory:ingest-payments] LemonSqueezy order ${o.id} has no total; skipping amount.`,
+            );
+          }
+          revenueUsdCents += total ?? 0;
           conversions += 1;
         }
 
@@ -403,10 +409,20 @@ export function registerFactoryPaymentsHandlers(): void {
       }
 
       // Upsert: delete any existing row for this run+provider, then insert fresh.
-      await db.delete(launchOutcomes).where(eq(launchOutcomes.runId, runId));
+      // Filtering by both runId and source ensures syncing one provider does not
+      // remove outcome rows from the other provider.
+      await db
+        .delete(launchOutcomes)
+        .where(
+          and(
+            eq(launchOutcomes.runId, runId),
+            eq(launchOutcomes.source, provider),
+          ),
+        );
 
       await db.insert(launchOutcomes).values({
         runId,
+        // revenueUsd column stores USD cents (matches Stripe/LemonSqueezy native unit)
         revenueUsd: revenueUsdCents,
         conversions,
         source: provider,
