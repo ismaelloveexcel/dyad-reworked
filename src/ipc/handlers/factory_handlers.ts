@@ -1,6 +1,7 @@
 import { createTypedHandler } from "./base";
 import {
   factoryContracts,
+  LaunchKitSchema,
   type IdeaEvaluationResult,
   type RunStatus,
   type LaunchOutcome,
@@ -12,7 +13,7 @@ import { factoryRuns, launchOutcomes } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import log from "electron-log";
 import { app, dialog, BrowserWindow } from "electron";
-import { writeFile, readFile, stat, rm } from "fs/promises";
+import { writeFile, readFile, stat, rm, mkdir } from "fs/promises";
 import path from "node:path";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
 import { copyDirectoryRecursive } from "@/ipc/utils/file_utils";
@@ -412,6 +413,36 @@ async function callWithRetry(prompt: string): Promise<string> {
     }
   }
   throw lastErr;
+}
+
+// =============================================================================
+// PR #10 — Launch-kit prompt
+// =============================================================================
+
+/** Build the prompt for generating a launch kit from an evaluated idea. */
+export function LAUNCH_KIT_PROMPT(idea: IdeaEvaluationResult): string {
+  return `You are a world-class startup marketer. Given the app idea below, produce launch copywriting and a deployment guide.
+
+App name: ${idea.name}
+Buyer: ${idea.buyer}
+Idea: ${idea.idea}
+Monetisation angle: ${idea.monetisationAngle ?? ""}
+Viral trigger: ${idea.viralTrigger ?? ""}
+Build prompt: ${(idea.buildPrompt ?? "").slice(0, 400)}
+
+Respond ONLY with valid JSON — no markdown, no code fences, no commentary — matching this exact schema:
+{
+  "elevatorPitch":   "<≤20-word one-sentence verbal pitch>",
+  "twitterPost":     "<≤280-char X post with hook and 1-2 hashtags>",
+  "linkedinPost":    "<2-3 paragraph LinkedIn announcement>",
+  "heroHeadline":    "<≤10-word landing-page H1>",
+  "heroSubtext":     "<1-2 sentence sub-headline below the H1>",
+  "emailSubject":    "<≤60-char cold-email subject line>",
+  "emailBody":       "<5-sentence cold-email body — leave [Name] / [Company] placeholders>",
+  "deployChecklist": ["step 1", "step 2", "…"]
+}
+
+The deployChecklist should guide a non-technical founder through deploying the scaffolded Vite + React app. Cover: pushing code to GitHub, connecting to Vercel (or Netlify), setting any required environment variables, running the first production build, and verifying the live URL.`;
 }
 
 // =============================================================================
@@ -1093,6 +1124,164 @@ export function registerFactoryHandlers() {
         throw new DyadError(
           `Scaffold failed for "${appName}": ${err instanceof Error ? err.message : String(err)}`,
           DyadErrorKind.ScaffoldFailure,
+        );
+      }
+    },
+  );
+
+  // ===========================================================================
+  // PR #10 — Launch-kit generator
+  // Reads the stored run from DB, calls the active LLM provider with a
+  // copywriting + deployment prompt, and returns a validated LaunchKit object.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.generateLaunchKit,
+    async (_, { runId }) => {
+      // Load the run from DB
+      let idea: IdeaEvaluationResult;
+      try {
+        const rows = await db
+          .select()
+          .from(factoryRuns)
+          .where(eq(factoryRuns.id, runId))
+          .limit(1);
+        if (rows.length === 0) {
+          throw new DyadError(
+            `No factory run found with id ${runId}.`,
+            DyadErrorKind.NotFound,
+          );
+        }
+        idea = JSON.parse(rows[0].ideaJson) as IdeaEvaluationResult;
+      } catch (err) {
+        if (err instanceof DyadError) throw err;
+        throw new DyadError(
+          `Failed to read factory run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.FactoryPersistenceFailure,
+        );
+      }
+
+      // Call LLM with the launch-kit prompt
+      let raw: string;
+      try {
+        raw = await callWithRetry(LAUNCH_KIT_PROMPT(idea));
+      } catch (err) {
+        throw new DyadError(
+          `LLM call failed for launch kit (run ${runId}): ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.LaunchKitFailure,
+        );
+      }
+
+      // Parse and validate the JSON response
+      let parsed: unknown;
+      try {
+        // Strip markdown fences if the model wraps the output
+        const stripped = raw
+          .replace(/^```(?:json)?\s*/i, "")
+          .replace(/\s*```\s*$/, "")
+          .trim();
+        parsed = JSON.parse(stripped);
+      } catch {
+        throw new DyadError(
+          `Launch-kit LLM response was not valid JSON for run ${runId}.`,
+          DyadErrorKind.InvalidLlmResponse,
+        );
+      }
+
+      // Validate against the LaunchKitSchema
+      const result = LaunchKitSchema.safeParse(parsed);
+      if (!result.success) {
+        throw new DyadError(
+          `Launch-kit response failed schema validation for run ${runId}: ${result.error.message}`,
+          DyadErrorKind.InvalidLlmResponse,
+        );
+      }
+      return result.data;
+    },
+  );
+
+  // ===========================================================================
+  // PR #10 — Export launch kit to disk
+  // Writes individual .md / .txt files to
+  //   userData/factory-apps/<slug>/launch-kit/
+  // and returns the directory path so the renderer can surface it.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.exportLaunchKit,
+    async (_, { runId, kit }) => {
+      // Load the run to derive the slug from the idea name
+      let ideaName: string;
+      try {
+        const rows = await db
+          .select({ ideaJson: factoryRuns.ideaJson })
+          .from(factoryRuns)
+          .where(eq(factoryRuns.id, runId))
+          .limit(1);
+        if (rows.length === 0) {
+          throw new DyadError(
+            `No factory run found with id ${runId}.`,
+            DyadErrorKind.NotFound,
+          );
+        }
+        const idea = JSON.parse(rows[0].ideaJson) as { name?: string };
+        ideaName = idea.name ?? `run-${runId}`;
+      } catch (err) {
+        if (err instanceof DyadError) throw err;
+        throw new DyadError(
+          `Failed to read factory run ${runId} for export: ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.LaunchKitFailure,
+        );
+      }
+
+      const slug =
+        ideaName
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 64) || `factory-app-${runId}`;
+
+      const kitDir = path.join(
+        app.getPath("userData"),
+        "factory-apps",
+        slug,
+        "launch-kit",
+      );
+
+      try {
+        await mkdir(kitDir, { recursive: true });
+
+        const files: Array<[string, string]> = [
+          ["elevator-pitch.md", `# Elevator Pitch\n\n${kit.elevatorPitch}\n`],
+          ["twitter-post.md", `# X / Twitter Post\n\n${kit.twitterPost}\n`],
+          ["linkedin-post.md", `# LinkedIn Post\n\n${kit.linkedinPost}\n`],
+          [
+            "landing-page-copy.md",
+            `# Landing Page Copy\n\n## Headline\n\n${kit.heroHeadline}\n\n## Subtext\n\n${kit.heroSubtext}\n`,
+          ],
+          [
+            "cold-email.md",
+            `# Cold Email\n\n**Subject:** ${kit.emailSubject}\n\n${kit.emailBody}\n`,
+          ],
+          [
+            "deploy-checklist.md",
+            `# Deployment Checklist\n\n${kit.deployChecklist.map((step, i) => `${i + 1}. ${step}`).join("\n")}\n`,
+          ],
+        ];
+
+        await Promise.all(
+          files.map(([filename, content]) =>
+            writeFile(path.join(kitDir, filename), content, "utf-8"),
+          ),
+        );
+
+        logger.log(`[exportLaunchKit] Written to ${kitDir}`);
+        return { path: kitDir };
+      } catch (err) {
+        if (err instanceof DyadError) throw err;
+        throw new DyadError(
+          `Failed to export launch kit for run ${runId}: ${err instanceof Error ? err.message : String(err)}`,
+          DyadErrorKind.LaunchKitFailure,
         );
       }
     },

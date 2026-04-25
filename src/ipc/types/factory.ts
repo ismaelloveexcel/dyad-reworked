@@ -188,6 +188,31 @@ export type GeneratePortfolioResponse = z.infer<
 >;
 
 // =============================================================================
+// PR #10 — Launch Kit
+// Copywriting and deployment assets generated per-run from the idea data.
+// =============================================================================
+
+export const LaunchKitSchema = z.object({
+  /** One-sentence verbal pitch (≤ 20 words). */
+  elevatorPitch: z.string(),
+  /** ≤ 280-character X / Twitter post with hook. */
+  twitterPost: z.string(),
+  /** 2–3-paragraph LinkedIn announcement. */
+  linkedinPost: z.string(),
+  /** Landing-page H1 headline (≤ 10 words). */
+  heroHeadline: z.string(),
+  /** Landing-page supporting copy beneath the headline (1–2 sentences). */
+  heroSubtext: z.string(),
+  /** Cold-email subject line (≤ 60 characters). */
+  emailSubject: z.string(),
+  /** 5-sentence cold-email body ready to personalise. */
+  emailBody: z.string(),
+  /** Numbered deployment checklist — each element is one step. */
+  deployChecklist: z.array(z.string()),
+});
+export type LaunchKit = z.infer<typeof LaunchKitSchema>;
+
+// =============================================================================
 // Factory Contracts
 // =============================================================================
 
@@ -270,6 +295,23 @@ export const factoryContracts = {
     output: z.object({
       outcomes: z.array(QuantitativeLaunchOutcomeSchema),
     }),
+  }),
+  // PR #10 — Generate a launch kit (copywriting + deploy guide) for a run.
+  generateLaunchKit: defineContract({
+    channel: "factory:generate-launch-kit",
+    input: z.object({ runId: z.number().int().positive() }),
+    output: LaunchKitSchema,
+  }),
+  // PR #10 — Export a launch kit to disk.
+  // Accepts the kit content from the renderer (already generated) and writes
+  // individual text files to userData/factory-apps/<slug>/launch-kit/.
+  exportLaunchKit: defineContract({
+    channel: "factory:export-launch-kit",
+    input: z.object({
+      runId: z.number().int().positive(),
+      kit: LaunchKitSchema,
+    }),
+    output: z.object({ path: z.string() }),
   }),
   // PR #6 — Deterministic scaffolder: copies scaffold/ template, runs codemods,
   // npm install, npm run build; returns preview path + captured logs.
