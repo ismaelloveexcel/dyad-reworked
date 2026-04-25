@@ -1,170 +1,26 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import {
-  factoryClient,
   type IdeaEvaluationResult,
   type PatternEntry,
   type GeneratePortfolioResponse,
   type RunStatus,
-  type LaunchOutcome,
 } from "@/ipc/types/factory";
-import { SafeLocalStorage } from "@/lib/safe_local_storage";
+import {
+  type PipelineStatus,
+  type PipelineEntry,
+  type TractionEntry,
+  loadPipeline,
+  savePipeline,
+  loadTraction,
+  saveTraction,
+  extractPatterns,
+} from "@/core/factory";
+import { useFactoryRun } from "@/hooks/useFactoryRun";
 
-// =============================================================================
-// Local storage persistence
-// =============================================================================
-
-const STORAGE_KEY = "factory-v3-history";
-const PIPELINE_KEY = "factory-v3-pipeline";
-const TRACTION_KEY = "factory-v3-traction";
-
-// =============================================================================
-// Pipeline + Traction types
-// =============================================================================
-
-export type PipelineStatus =
-  | "Idea Generated"
-  | "Prompt Copied"
-  | "Building"
-  | "Built"
-  | "Launched"
-  | "Testing"
-  | "Killed";
-
-export interface PipelineEntry {
-  name: string;
-  buyer: string;
-  decision: "BUILD" | "REWORK" | "KILL";
-  totalScore: number;
-  monetisationAngle: string;
-  viralTrigger: string;
-  scores: IdeaEvaluationResult["scores"];
-  status: PipelineStatus;
-  addedAt: string;
-}
-
-export interface TractionEntry {
-  name: string;
-  revenue: string;
-  views: string;
-  users: string;
-  sales: string;
-  shares: string;
-  notes: string;
-}
-
-function loadHistory(): IdeaEvaluationResult[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as IdeaEvaluationResult[];
-  } catch {
-    return [];
-  }
-}
-
-function saveHistory(items: IdeaEvaluationResult[]) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items.slice(0, 50)));
-  } catch {}
-}
-
-function loadPipeline(): PipelineEntry[] {
-  return (
-    SafeLocalStorage.get<PipelineEntry[]>(PIPELINE_KEY, (v): v is PipelineEntry[] =>
-      Array.isArray(v),
-    ) ?? []
-  );
-}
-
-function savePipeline(items: PipelineEntry[]) {
-  SafeLocalStorage.set(PIPELINE_KEY, items);
-}
-
-function loadTraction(): TractionEntry[] {
-  return (
-    SafeLocalStorage.get<TractionEntry[]>(TRACTION_KEY, (v): v is TractionEntry[] =>
-      Array.isArray(v),
-    ) ?? []
-  );
-}
-
-function saveTraction(items: TractionEntry[]) {
-  SafeLocalStorage.set(TRACTION_KEY, items);
-}
-
-// =============================================================================
-// Pattern Engine — extract learned patterns from history + pipeline + traction
-// =============================================================================
-
-// `revenue` on PatternEntry is a free-text string ("$5,000", "1", "yes", …).
-// We treat any value containing a non-zero digit (1-9), or the literal "yes",
-// as a positive revenue signal for the pattern-weighting boost. Bare "0",
-// "no", and empty strings are explicitly excluded.
-function hasRevenueSignal(revenue: string | undefined): boolean {
-  if (!revenue) return false;
-  const trimmed = revenue.trim().toLowerCase();
-  if (trimmed === "" || trimmed === "0" || trimmed === "no") return false;
-  if (trimmed === "yes") return true;
-  return /[1-9]/.test(trimmed);
-}
-
-export function extractPatterns(
-  history: IdeaEvaluationResult[],
-  pipeline: PipelineEntry[],
-  traction: TractionEntry[],
-): PatternEntry[] {
-  const entries: PatternEntry[] = history.slice(0, 30).map((item) => {
-    const pe = pipeline.find((p) => p.name === item.name);
-    const te = traction.find((t) => t.name === item.name);
-
-    const t = item.idea.toLowerCase();
-    let category = "general";
-    if (/salary|payroll|compensation|hr/.test(t)) category = "hr-finance";
-    else if (/legal|compliance|contract|visa|permit/.test(t)) category = "legal-compliance";
-    else if (/marketing|social|viral|share/.test(t)) category = "marketing";
-    else if (/resume|cv|career|job/.test(t)) category = "career";
-    else if (/invoice|proposal|freelance|client/.test(t)) category = "freelance";
-    else if (/tax|vat|accounting|finance/.test(t)) category = "finance";
-
-    let status: PatternEntry["status"] = "unknown";
-    if (pe) {
-      if (pe.status === "Launched") status = "launched";
-      else if (pe.status === "Killed") status = "killed";
-      else if (pe.status === "Built") status = "built";
-      else status = "ignored";
-    }
-    // E3: honour runStatus from DB for items saved via saveRun
-    if (item.runStatus === "LAUNCHED") status = "launched";
-    else if (item.runStatus === "KILLED") status = "killed";
-
-    const entry: PatternEntry = {
-      name: item.name,
-      category,
-      region: item.region?.primary,
-      viralScore: item.scores.virality,
-      revenueScore: item.scores.monetisation,
-      status,
-      revenue:
-        te?.revenue?.trim()
-          ? te.revenue
-          : item.launchOutcome?.revenueGenerated
-            ? "1"
-            : undefined,
-      shares: te?.shares,
-    };
-    return entry;
-  });
-
-  // E3/E7 — weight launched+revenue entries 3x to reinforce winning patterns
-  const boosted: PatternEntry[] = [];
-  for (const e of entries) {
-    boosted.push(e);
-    if (e.status === "launched" && hasRevenueSignal(e.revenue)) {
-      boosted.push(e, e); // 2 extra copies = 3x total weight
-    }
-  }
-  return boosted;
-}
+// Re-export types used by external test files so imports from this module
+// continue to work after the business logic was extracted to @/core/factory.
+export type { PipelineStatus, PipelineEntry, TractionEntry };
+export { extractPatterns };
 
 // =============================================================================
 // Utility
@@ -1615,105 +1471,26 @@ type FactoryTab = "dashboard" | "portfolio" | "explore" | "manual" | "history";
 
 export default function FactoryPage() {
   const [activeTab, setActiveTab] = useState<FactoryTab>("dashboard");
-  const [history, setHistory] = useState<IdeaEvaluationResult[]>([]);
   const [pipeline, setPipeline] = useState<PipelineEntry[]>(loadPipeline);
   const [traction, setTraction] = useState<TractionEntry[]>(loadTraction);
-  // E1 — duplicate warning (non-blocking banner)
-  const [duplicateWarning, setDuplicateWarning] = useState<{
-    id: number;
-    existing: IdeaEvaluationResult;
-  } | null>(null);
-  // PR #1 — Global system status (OpenAI key presence + pinned model snapshot)
-  const [systemStatus, setSystemStatus] = useState<{
-    openaiKeyPresent: boolean;
-    modelVersion: string;
-  } | null>(null);
 
-  // Load history from DB on mount; migrate legacy localStorage data once
-  useEffect(() => {
-    // One-time migration: localStorage → DB
-    if (!localStorage.getItem("factory-v3-migrated")) {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const legacy = JSON.parse(raw) as IdeaEvaluationResult[];
-          for (const idea of legacy) {
-            factoryClient.saveRun({ idea }).catch(() => {});
-          }
-          localStorage.removeItem(STORAGE_KEY);
-        }
-      } catch {
-        // ignore migration errors
-      }
-      localStorage.setItem("factory-v3-migrated", "1");
-    }
-
-    // Load from DB
-    factoryClient
-      .listRuns({})
-      .then(({ runs }) => setHistory(runs))
-      .catch(() => {});
-
-    // PR #1 — Probe system status so we can show the missing-key banner
-    factoryClient
-      .getSystemStatus({})
-      .then(setSystemStatus)
-      .catch(() => {});
-  }, []);
+  // All DB-backed state (history, systemStatus, mutations) is managed by the hook
+  const {
+    history,
+    systemStatus,
+    duplicateWarning,
+    dismissDuplicateWarning,
+    addToHistory,
+    handleRunStatusChange,
+    clearHistory,
+    exportRuns,
+  } = useFactoryRun();
 
   // Derived pattern data for Pattern Engine
   const patterns = useMemo(
     () => extractPatterns(history, pipeline, traction),
     [history, pipeline, traction],
   );
-
-  const addToHistory = useCallback(
-    (items: IdeaEvaluationResult | IdeaEvaluationResult[]) => {
-      const arr = Array.isArray(items) ? items : [items];
-      // Persist each new item to DB; track returned runId (E1/E2)
-      for (const idea of arr) {
-        factoryClient
-          .saveRun({ idea })
-          .then(({ id, duplicate }) => {
-            if (duplicate) {
-              // E1 — non-blocking duplicate warning
-              setDuplicateWarning({ id, existing: duplicate });
-            } else {
-              // Inject runId back into the history entry
-              setHistory((prev) =>
-                prev.map((p) => (p.name === idea.name ? { ...p, runId: id, runStatus: "DECIDED" as RunStatus } : p)),
-              );
-            }
-          })
-          .catch(() => {});
-      }
-      setHistory((prev) => {
-        const names = new Set(arr.map((i) => i.name));
-        return [...arr, ...prev.filter((p) => !names.has(p.name))].slice(0, 200);
-      });
-    },
-    [],
-  );
-
-  // E2 — update run status in DB and local state
-  const handleRunStatusChange = useCallback(
-    (runId: number, status: RunStatus) => {
-      factoryClient
-        .updateRunStatus({ id: runId, status })
-        .then(() => {
-          setHistory((prev) =>
-            prev.map((h) => (h.runId === runId ? { ...h, runStatus: status } : h)),
-          );
-        })
-        .catch(() => {});
-    },
-    [],
-  );
-
-  // E6 — export runs to file
-  const handleExportRuns = useCallback((filter: "BUILD" | "all") => {
-    factoryClient.exportRuns({ filter }).catch(() => {});
-  }, []);
 
   const handlePipelineChange = (updated: PipelineEntry[]) => {
     setPipeline(updated);
@@ -1743,10 +1520,6 @@ export default function FactoryPage() {
     savePipeline(next);
   };
 
-  const clearHistory = () => {
-    setHistory([]);
-    factoryClient.clearRuns({}).catch(() => {});
-  };
 
   // Derive current prompt version from most recent history item that has one
   const currentPromptVersion = useMemo(
@@ -1809,7 +1582,7 @@ export default function FactoryPage() {
               </p>
             </div>
             <button
-              onClick={() => setDuplicateWarning(null)}
+              onClick={dismissDuplicateWarning}
               className="text-amber-600 hover:text-amber-400 transition-colors text-lg leading-none shrink-0"
               aria-label="Dismiss"
             >
@@ -1844,7 +1617,7 @@ export default function FactoryPage() {
             onPipelineChange={handlePipelineChange}
             onTractionChange={handleTractionChange}
             onAddToPipeline={handleAddToPipeline}
-            onExportRuns={handleExportRuns}
+            onExportRuns={exportRuns}
             currentPromptVersion={currentPromptVersion}
           />
         )}

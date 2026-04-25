@@ -339,6 +339,15 @@ export const queryKeys = {
   media: {
     all: ["media"] as const,
   },
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Factory
+  // ─────────────────────────────────────────────────────────────────────────────
+  factory: {
+    all: ["factory"] as const,
+    runs: ["factory", "runs"] as const,
+    systemStatus: ["factory", "systemStatus"] as const,
+  },
 } as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -403,4 +412,5 @@ export type AppQueryKey =
   | QueryKeyOf<(typeof queryKeys.github)[keyof typeof queryKeys.github]>
   | QueryKeyOf<(typeof queryKeys.neon)[keyof typeof queryKeys.neon]>
   | QueryKeyOf<(typeof queryKeys.appEnvVars)[keyof typeof queryKeys.appEnvVars]>
-  | QueryKeyOf<(typeof queryKeys.media)[keyof typeof queryKeys.media]>;
+  | QueryKeyOf<(typeof queryKeys.media)[keyof typeof queryKeys.media]>
+  | QueryKeyOf<(typeof queryKeys.factory)[keyof typeof queryKeys.factory]>;
