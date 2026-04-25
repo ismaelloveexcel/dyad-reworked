@@ -96,7 +96,18 @@ function saveTraction(items: TractionEntry[]) {
 // Pattern Engine — extract learned patterns from history + pipeline + traction
 // =============================================================================
 
-function extractPatterns(
+// `revenue` on PatternEntry is a free-text string ("$5,000", "1", "yes", …).
+// We treat any non-empty value with at least one digit, or the literal "yes",
+// as a positive revenue signal for the pattern-weighting boost.
+function hasRevenueSignal(revenue: string | undefined): boolean {
+  if (!revenue) return false;
+  const trimmed = revenue.trim().toLowerCase();
+  if (trimmed === "" || trimmed === "0" || trimmed === "no") return false;
+  if (trimmed === "yes") return true;
+  return /[1-9]/.test(trimmed);
+}
+
+export function extractPatterns(
   history: IdeaEvaluationResult[],
   pipeline: PipelineEntry[],
   traction: TractionEntry[],
@@ -132,7 +143,9 @@ function extractPatterns(
       viralScore: item.scores.virality,
       revenueScore: item.scores.monetisation,
       status,
-      revenue: te?.revenue ?? item.launchOutcome?.revenueGenerated ? 1 : undefined,
+      revenue:
+        te?.revenue ??
+        (item.launchOutcome?.revenueGenerated ? "1" : undefined),
       shares: te?.shares,
     };
     return entry;
@@ -142,7 +155,7 @@ function extractPatterns(
   const boosted: PatternEntry[] = [];
   for (const e of entries) {
     boosted.push(e);
-    if (e.status === "launched" && (e.revenue ?? 0) > 0) {
+    if (e.status === "launched" && hasRevenueSignal(e.revenue)) {
       boosted.push(e, e); // 2 extra copies = 3x total weight
     }
   }
@@ -443,109 +456,6 @@ function IdeaCard({
             )}
           </div>
         )}
-    </div>
-  );
-}
-          <h3 className="text-lg font-semibold text-white">{result.name}</h3>
-          <p className="text-sm text-zinc-400 mt-0.5">{result.buyer}</p>
-        </div>
-        <div className="flex items-center gap-3">
-          <span
-            className={`text-xs font-bold px-3 py-1 rounded-full border ${decisionColor(result.decision)}`}
-          >
-            {result.decision}
-          </span>
-          {onClose && (
-            <button
-              onClick={onClose}
-              className="text-zinc-500 hover:text-white transition-colors text-lg leading-none"
-              aria-label="Close"
-            >
-              ×
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Scores */}
-      <div className="space-y-2">
-        <div className="flex justify-between items-center mb-3">
-          <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
-            Scores
-          </span>
-          <span className="text-sm font-semibold text-white">
-            Total:{" "}
-            <span className={scoreColor(result.totalScore / 8)}>
-              {result.totalScore}
-              <span className="text-zinc-500">/40</span>
-            </span>
-          </span>
-        </div>
-        <ScoreBar label="Buyer Clarity" value={result.scores.buyerClarity} />
-        <ScoreBar label="Pain Urgency" value={result.scores.painUrgency} />
-        <ScoreBar label="Market Exists" value={result.scores.marketExistence} />
-        <ScoreBar label="Differentiation" value={result.scores.differentiation} />
-        <ScoreBar label="Not Replaceable" value={result.scores.replaceability} />
-        <ScoreBar label="Virality" value={result.scores.virality} />
-        <ScoreBar label="Monetisation" value={result.scores.monetisation} />
-        <ScoreBar label="Build Simplicity" value={result.scores.buildSimplicity} />
-      </div>
-
-      {/* Reason */}
-      <p className="text-sm text-zinc-300 leading-relaxed">{result.reason}</p>
-
-      {/* Monetisation + Viral */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="bg-zinc-800/60 rounded-lg p-3">
-          <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">
-            Monetisation
-          </p>
-          <p className="text-sm text-zinc-200">{result.monetisationAngle}</p>
-        </div>
-        <div className="bg-zinc-800/60 rounded-lg p-3">
-          <p className="text-xs text-zinc-500 uppercase tracking-wider mb-1">
-            Viral Trigger
-          </p>
-          <p className="text-sm text-zinc-200">{result.viralTrigger}</p>
-        </div>
-      </div>
-
-      {/* Improved idea */}
-      {result.improvedIdea && (
-        <div className="border border-amber-900/50 bg-amber-950/20 rounded-lg p-3">
-          <p className="text-xs text-amber-500 uppercase tracking-wider mb-1">
-            Improved Direction
-          </p>
-          <p className="text-sm text-amber-200">{result.improvedIdea}</p>
-        </div>
-      )}
-
-      {/* Build prompt */}
-      {result.decision === "BUILD" && result.buildPrompt && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
-              Build Prompt
-            </span>
-            <button
-              onClick={handleCopy}
-              className="text-xs px-3 py-1.5 rounded-lg bg-emerald-900/50 text-emerald-300 hover:bg-emerald-800/60 border border-emerald-800 transition-colors"
-            >
-              {copied ? "Copied!" : "Copy Prompt"}
-            </button>
-          </div>
-          <pre className="text-xs text-zinc-400 bg-zinc-950 rounded-lg p-4 overflow-auto max-h-48 leading-relaxed whitespace-pre-wrap">
-            {result.buildPrompt}
-          </pre>
-        </div>
-      )}
-
-      {/* Fallback notice */}
-      {result.fallbackUsed && (
-        <p className="text-xs text-zinc-600 italic">
-          AI response invalid — local scoring used.
-        </p>
-      )}
     </div>
   );
 }
@@ -941,13 +851,6 @@ function IdeaRow({
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!idea.buildPrompt) return;
-    const ok = await copyToClipboard(idea.buildPrompt);
-    if (ok) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
     if (!idea.buildPrompt) return;
     const ok = await copyToClipboard(idea.buildPrompt);
     if (ok) {
