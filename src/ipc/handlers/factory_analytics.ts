@@ -110,7 +110,12 @@ async function fetchPlausibleStats(
     });
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      let text = "";
+      try {
+        text = await response.text();
+      } catch {
+        // ignore text-read failure; status code is sufficient
+      }
       throw new DyadError(
         `Plausible stats API error ${response.status}: ${text.slice(0, 200)}`,
         DyadErrorKind.AnalyticsIngestFailure,

@@ -890,7 +890,7 @@ function NightlyStatusBadge() {
 
   const { lastRanAt, enabled } = query.data;
   const lastRanLabel = lastRanAt
-    ? new Date(lastRanAt * 1000).toLocaleString("en-GB", {
+    ? new Date(lastRanAt * 1000).toLocaleString(undefined, {
         day: "numeric",
         month: "short",
         hour: "2-digit",

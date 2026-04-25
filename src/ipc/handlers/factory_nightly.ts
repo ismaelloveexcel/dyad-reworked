@@ -132,11 +132,6 @@ function scheduleNextRun(): void {
   nextRunAt = Math.floor((Date.now() + NIGHTLY_INTERVAL_MS) / 1000);
 
   nightlyTimer = setInterval(() => {
-    const settings = readSettings();
-    if (settings.factoryNightlyJobEnabled === false) {
-      logger.log("Nightly: job disabled; skipping this tick.");
-      return;
-    }
     runNightlyIngest().catch((err) => {
       logger.error("Nightly: unhandled error in ingest cycle", err);
     });
