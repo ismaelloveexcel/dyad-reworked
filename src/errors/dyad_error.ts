@@ -25,6 +25,14 @@ export enum DyadErrorKind {
   OpenAiTimeout = "openai_timeout",
   /** OpenAI returned HTTP 429 (rate-limited / quota exceeded). */
   OpenAiRateLimit = "openai_rate_limit",
+  /** Anthropic request timed out or was aborted. */
+  AnthropicTimeout = "anthropic_timeout",
+  /** Anthropic returned HTTP 429 (rate-limited / quota exceeded). */
+  AnthropicRateLimit = "anthropic_rate_limit",
+  /** Google AI request timed out or was aborted. */
+  GoogleTimeout = "google_timeout",
+  /** Google AI returned HTTP 429 (rate-limited / quota exceeded). */
+  GoogleRateLimit = "google_rate_limit",
   /** LLM output could not be parsed or failed schema validation. */
   InvalidLlmResponse = "invalid_llm_response",
   /** Factory persistence read/write failure. */
@@ -46,6 +54,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   // Factory-specific: these are expected non-bug conditions
   DyadErrorKind.MissingApiKey,
   DyadErrorKind.OpenAiRateLimit,
+  DyadErrorKind.AnthropicRateLimit,
+  DyadErrorKind.GoogleRateLimit,
   DyadErrorKind.InvalidLlmResponse,
   DyadErrorKind.QualityGateRejection,
   // Scaffold failures are user-visible build errors, not bugs — exclude from PostHog

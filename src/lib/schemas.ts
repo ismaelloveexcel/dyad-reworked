@@ -368,6 +368,13 @@ const BaseUserSettingsFields = {
     .max(40)
     .optional()
     .catch(undefined),
+  // PR #8 — Factory provider routing: choose which AI provider powers the
+  // Factory pipeline. Defaults to "openai". Invalid values fall back to undefined
+  // so the caller's `?? "openai"` default is applied.
+  factoryProvider: z
+    .enum(["openai", "anthropic", "google"])
+    .optional()
+    .catch(undefined),
 };
 
 /**

@@ -51,6 +51,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   // PR #3 — Factory quality gate default: 20/40 (50 %). Ideas scoring below this
   // are not persisted to the DB. Configurable in Settings → Workflow.
   factoryScoreThreshold: 20,
+  // PR #8 — Factory provider routing default: "openai".
+  factoryProvider: "openai",
 };
 
 const SETTINGS_FILE = "user-settings.json";

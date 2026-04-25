@@ -143,16 +143,18 @@ vi.mock("@/ipc/utils/socket_firewall", () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock settings so saveRun can read the quality-gate threshold
+// Mock settings so saveRun can read the quality-gate threshold and provider
 // ---------------------------------------------------------------------------
 
 const mockSettingsState = vi.hoisted(() => ({
   factoryScoreThreshold: 20 as number | undefined,
+  factoryProvider: "openai" as "openai" | "anthropic" | "google" | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
   readSettings: vi.fn(() => ({
     factoryScoreThreshold: mockSettingsState.factoryScoreThreshold,
+    factoryProvider: mockSettingsState.factoryProvider,
   })),
 }));
 
@@ -163,6 +165,9 @@ vi.mock("@/main/settings", () => ({
 import {
   registerFactoryHandlers,
   OPENAI_MODEL_VERSION,
+  ANTHROPIC_MODEL_VERSION,
+  GOOGLE_MODEL_VERSION,
+  getFactoryModelVersion,
 } from "@/ipc/handlers/factory_handlers";
 import { DyadErrorKind } from "@/errors/dyad_error";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
@@ -216,6 +221,50 @@ function makeFakeOpenAIResponse(content: string) {
   };
 }
 
+/** Build a fake Anthropic response that contains valid factory JSON. */
+function makeFakeAnthropicResponse(content: string) {
+  return {
+    ok: true,
+    status: 200,
+    json: () =>
+      Promise.resolve({
+        content: [{ type: "text", text: content }],
+      }),
+    text: () => Promise.resolve(content),
+  };
+}
+
+/** Build a fake Google AI response that contains valid factory JSON. */
+function makeFakeGoogleResponse(content: string) {
+  return {
+    ok: true,
+    status: 200,
+    json: () =>
+      Promise.resolve({
+        candidates: [{ content: { parts: [{ text: content }] } }],
+      }),
+    text: () => Promise.resolve(content),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// getFactoryModelVersion helper
+// ---------------------------------------------------------------------------
+
+describe("getFactoryModelVersion", () => {
+  it("returns OPENAI_MODEL_VERSION for openai", () => {
+    expect(getFactoryModelVersion("openai")).toBe(OPENAI_MODEL_VERSION);
+  });
+
+  it("returns ANTHROPIC_MODEL_VERSION for anthropic", () => {
+    expect(getFactoryModelVersion("anthropic")).toBe(ANTHROPIC_MODEL_VERSION);
+  });
+
+  it("returns GOOGLE_MODEL_VERSION for google", () => {
+    expect(getFactoryModelVersion("google")).toBe(GOOGLE_MODEL_VERSION);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
@@ -225,6 +274,7 @@ beforeEach(() => {
   mockDbState.rows = [];
   mockDbState.insertedId = 1;
   mockSettingsState.factoryScoreThreshold = 20;
+  mockSettingsState.factoryProvider = "openai";
   vi.clearAllMocks();
   // Re-wire createTypedHandler after clearAllMocks (implementation is preserved,
   // but we clear call history). Calling registerFactoryHandlers() re-populates the map.
@@ -233,6 +283,8 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.GOOGLE_API_KEY;
   vi.unstubAllGlobals();
 });
 
@@ -247,9 +299,13 @@ describe("factory:get-system-status", () => {
     const result = (await handler(mockEvent, {})) as {
       openaiKeyPresent: boolean;
       modelVersion: string;
+      provider: string;
+      providerKeyPresent: boolean;
     };
     expect(result.openaiKeyPresent).toBe(true);
     expect(result.modelVersion).toBe(OPENAI_MODEL_VERSION);
+    expect(result.provider).toBe("openai");
+    expect(result.providerKeyPresent).toBe(true);
   });
 
   it("reports openaiKeyPresent=false when env var is missing", async () => {
@@ -257,8 +313,10 @@ describe("factory:get-system-status", () => {
     const handler = capturedHandlers.get("factory:get-system-status")!;
     const result = (await handler(mockEvent, {})) as {
       openaiKeyPresent: boolean;
+      providerKeyPresent: boolean;
     };
     expect(result.openaiKeyPresent).toBe(false);
+    expect(result.providerKeyPresent).toBe(false);
   });
 
   it("reports openaiKeyPresent=false when env var is whitespace", async () => {
@@ -266,8 +324,48 @@ describe("factory:get-system-status", () => {
     const handler = capturedHandlers.get("factory:get-system-status")!;
     const result = (await handler(mockEvent, {})) as {
       openaiKeyPresent: boolean;
+      providerKeyPresent: boolean;
     };
     expect(result.openaiKeyPresent).toBe(false);
+    expect(result.providerKeyPresent).toBe(false);
+  });
+
+  it("reports anthropic provider and key status when factoryProvider=anthropic", async () => {
+    mockSettingsState.factoryProvider = "anthropic";
+    process.env.ANTHROPIC_API_KEY = "ant-test";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      provider: string;
+      providerKeyPresent: boolean;
+      modelVersion: string;
+    };
+    expect(result.provider).toBe("anthropic");
+    expect(result.providerKeyPresent).toBe(true);
+    expect(result.modelVersion).toBe(ANTHROPIC_MODEL_VERSION);
+  });
+
+  it("reports google provider and key status when factoryProvider=google", async () => {
+    mockSettingsState.factoryProvider = "google";
+    process.env.GOOGLE_API_KEY = "goog-test";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      provider: string;
+      providerKeyPresent: boolean;
+      modelVersion: string;
+    };
+    expect(result.provider).toBe("google");
+    expect(result.providerKeyPresent).toBe(true);
+    expect(result.modelVersion).toBe(GOOGLE_MODEL_VERSION);
+  });
+
+  it("reports providerKeyPresent=false when anthropic key is missing", async () => {
+    mockSettingsState.factoryProvider = "anthropic";
+    delete process.env.ANTHROPIC_API_KEY;
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      providerKeyPresent: boolean;
+    };
+    expect(result.providerKeyPresent).toBe(false);
   });
 });
 
@@ -371,6 +469,158 @@ describe("factory:evaluate-idea", () => {
     };
     expect(typeof result.promptVersion).toBe("string");
     expect(typeof result.promptHash).toBe("string");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #8 — Multi-provider routing: factory:evaluate-idea
+// ---------------------------------------------------------------------------
+
+describe("factory:evaluate-idea — multi-provider routing", () => {
+  it("routes to Anthropic when factoryProvider=anthropic and returns valid result", async () => {
+    mockSettingsState.factoryProvider = "anthropic";
+    process.env.ANTHROPIC_API_KEY = "ant-valid";
+    const validContent = JSON.stringify({
+      idea: "Invoice automation for Dubai freelancers",
+      name: "InvoicePro UAE",
+      buyer: "Freelancers in UAE",
+      scores: {
+        buyerClarity: 5,
+        painUrgency: 4,
+        marketExistence: 4,
+        differentiation: 3,
+        replaceability: 4,
+        virality: 3,
+        monetisation: 4,
+        buildSimplicity: 4,
+      },
+      totalScore: 31,
+      decision: "BUILD",
+      reason: "Strong scores.",
+      improvedIdea: "",
+      buildPrompt: "Build an invoice SaaS...",
+      monetisationAngle: "Monthly subscription",
+      viralTrigger: "Share your invoice template",
+      fallbackUsed: false,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeFakeAnthropicResponse(validContent)),
+    );
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { name: string; fallbackUsed: boolean };
+    expect(result.name).toBe("InvoicePro UAE");
+    expect(result.fallbackUsed).toBe(false);
+  });
+
+  it("throws DyadError(MissingApiKey) when factoryProvider=anthropic and key is absent", async () => {
+    mockSettingsState.factoryProvider = "anthropic";
+    delete process.env.ANTHROPIC_API_KEY;
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    await expect(handler(mockEvent, { idea: "test" })).rejects.toMatchObject({
+      kind: DyadErrorKind.MissingApiKey,
+    });
+  });
+
+  it("propagates DyadError(AnthropicRateLimit) when Anthropic returns HTTP 429", async () => {
+    mockSettingsState.factoryProvider = "anthropic";
+    process.env.ANTHROPIC_API_KEY = "ant-valid";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: () => Promise.resolve("rate limit"),
+      }),
+    );
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    await expect(handler(mockEvent, { idea: "test" })).rejects.toMatchObject({
+      kind: DyadErrorKind.AnthropicRateLimit,
+    });
+  });
+
+  it("routes to Google when factoryProvider=google and returns valid result", async () => {
+    mockSettingsState.factoryProvider = "google";
+    process.env.GOOGLE_API_KEY = "goog-valid";
+    const validContent = JSON.stringify({
+      idea: "Invoice automation for Dubai freelancers",
+      name: "InvoicePro UAE",
+      buyer: "Freelancers in UAE",
+      scores: {
+        buyerClarity: 4,
+        painUrgency: 4,
+        marketExistence: 3,
+        differentiation: 3,
+        replaceability: 3,
+        virality: 3,
+        monetisation: 4,
+        buildSimplicity: 4,
+      },
+      totalScore: 28,
+      decision: "BUILD",
+      reason: "Good scores.",
+      improvedIdea: "",
+      buildPrompt: "Build a SaaS...",
+      monetisationAngle: "Subscription",
+      viralTrigger: "Share",
+      fallbackUsed: false,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(makeFakeGoogleResponse(validContent)),
+    );
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { name: string; fallbackUsed: boolean };
+    expect(result.name).toBe("InvoicePro UAE");
+    expect(result.fallbackUsed).toBe(false);
+  });
+
+  it("throws DyadError(MissingApiKey) when factoryProvider=google and key is absent", async () => {
+    mockSettingsState.factoryProvider = "google";
+    delete process.env.GOOGLE_API_KEY;
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    await expect(handler(mockEvent, { idea: "test" })).rejects.toMatchObject({
+      kind: DyadErrorKind.MissingApiKey,
+    });
+  });
+
+  it("propagates DyadError(GoogleRateLimit) when Google returns HTTP 429", async () => {
+    mockSettingsState.factoryProvider = "google";
+    process.env.GOOGLE_API_KEY = "goog-valid";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 429,
+        text: () => Promise.resolve("rate limit"),
+      }),
+    );
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    await expect(handler(mockEvent, { idea: "test" })).rejects.toMatchObject({
+      kind: DyadErrorKind.GoogleRateLimit,
+    });
+  });
+
+  it("falls back to deterministic scoring when Google returns HTTP 401", async () => {
+    mockSettingsState.factoryProvider = "google";
+    process.env.GOOGLE_API_KEY = "goog-invalid";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        text: () => Promise.resolve("Unauthorized"),
+      }),
+    );
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { fallbackUsed: boolean };
+    expect(result.fallbackUsed).toBe(true);
   });
 });
 

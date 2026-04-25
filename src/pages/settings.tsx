@@ -37,6 +37,7 @@ import { ContextCompactionSwitch } from "@/components/ContextCompactionSwitch";
 import { BlockUnsafeNpmPackagesSwitch } from "@/components/BlockUnsafeNpmPackagesSwitch";
 import { CloudSandboxExperimentSwitch } from "@/components/CloudSandboxExperimentSwitch";
 import { FactoryScoreThresholdSetting } from "@/components/FactoryScoreThresholdSetting";
+import { FactoryProviderSetting } from "@/components/FactoryProviderSetting";
 import { useSetAtom } from "jotai";
 import { activeSettingsSectionAtom } from "@/atoms/viewAtoms";
 import { SECTION_IDS, SETTING_IDS } from "@/lib/settingsSearchIndex";
@@ -436,6 +437,10 @@ export function WorkflowSettings() {
 
       <div id={SETTING_IDS.factoryScoreThreshold} className="space-y-1 mt-4">
         <FactoryScoreThresholdSetting />
+      </div>
+
+      <div id={SETTING_IDS.factoryProvider} className="space-y-1 mt-4">
+        <FactoryProviderSetting />
       </div>
     </div>
   );
