@@ -65,6 +65,7 @@ vi.mock("drizzle-orm", async (importOriginal) => {
     ...actual,
     eq: vi.fn((_col: unknown, _val: unknown) => "eq-predicate"),
     desc: vi.fn((_col: unknown) => "desc-order"),
+    and: vi.fn((..._args: unknown[]) => "and-predicate"),
   };
 });
 
@@ -132,6 +133,15 @@ vi.mock("@/db", () => {
       insert: vi.fn().mockImplementation(() => makeChain()),
       delete: vi.fn().mockImplementation(() => makeChain()),
       update: vi.fn().mockImplementation(() => makeChain()),
+      // PR #12 — transaction mock: executes the callback with a tx proxy that
+      // exposes the same chain API so delete+insert inside transaction() work.
+      transaction: vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => {
+        const txProxy = {
+          insert: vi.fn().mockImplementation(() => makeChain()),
+          delete: vi.fn().mockImplementation(() => makeChain()),
+        };
+        return fn(txProxy);
+      }),
     },
   };
 });
@@ -173,6 +183,9 @@ const mockSettingsState = vi.hoisted(() => ({
   // PR #11 — deploy token state
   vercelAccessToken: undefined as { value: string } | undefined,
   netlifyAccessToken: undefined as { value: string } | undefined,
+  // PR #12 — payment provider key state
+  lemonSqueezyApiKey: undefined as { value: string } | undefined,
+  stripeSecretKey: undefined as { value: string } | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
@@ -184,6 +197,8 @@ vi.mock("@/main/settings", () => ({
       mockSettingsState.factoryEmbeddingSimilarityThreshold,
     vercelAccessToken: mockSettingsState.vercelAccessToken,
     netlifyAccessToken: mockSettingsState.netlifyAccessToken,
+    lemonSqueezyApiKey: mockSettingsState.lemonSqueezyApiKey,
+    stripeSecretKey: mockSettingsState.stripeSecretKey,
   })),
   // PR #11 — writeSettings mock for factory:save-netlify-token
   writeSettings: vi.fn(),
@@ -201,6 +216,7 @@ import {
   getFactoryModelVersion,
   LAUNCH_KIT_PROMPT,
 } from "@/ipc/handlers/factory_handlers";
+import { registerFactoryPaymentsHandlers } from "@/ipc/handlers/factory_payments";
 import { DyadErrorKind } from "@/errors/dyad_error";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
 
@@ -312,12 +328,16 @@ beforeEach(() => {
   // PR #11 — reset deploy token state
   mockSettingsState.vercelAccessToken = undefined;
   mockSettingsState.netlifyAccessToken = undefined;
+  // PR #12 — reset payment key state
+  mockSettingsState.lemonSqueezyApiKey = undefined;
+  mockSettingsState.stripeSecretKey = undefined;
   // Reset fetchEmbedding to its default implementation
   mockFetchEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   vi.clearAllMocks();
   // Re-wire createTypedHandler after clearAllMocks (implementation is preserved,
   // but we clear call history). Calling registerFactoryHandlers() re-populates the map.
   registerFactoryHandlers();
+  registerFactoryPaymentsHandlers();
 });
 
 afterEach(() => {
@@ -2304,9 +2324,7 @@ describe("factory:deploy-app", () => {
   });
 
   it("throws Auth when Vercel token is not configured", async () => {
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.vercelAccessToken = undefined;
     const handler = capturedHandlers.get("factory:deploy-app")!;
     await expect(
@@ -2315,9 +2333,7 @@ describe("factory:deploy-app", () => {
   });
 
   it("throws Auth when Netlify token is not configured", async () => {
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.netlifyAccessToken = undefined;
     const handler = capturedHandlers.get("factory:deploy-app")!;
     await expect(
@@ -2326,8 +2342,11 @@ describe("factory:deploy-app", () => {
   });
 
   it("deploys to Vercel and returns url when token is present and API succeeds", async () => {
-    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
-      await import("fs/promises");
+    const {
+      readdir: mockReaddir,
+      readFile: mockReadFile,
+      stat: mockStat,
+    } = await import("fs/promises");
 
     // Simulate dist/ with a single file: index.html
     vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
@@ -2341,9 +2360,7 @@ describe("factory:deploy-app", () => {
       Buffer.from("<!doctype html><html/>") as any,
     );
 
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.vercelAccessToken = { value: "test-vercel-token" };
 
     vi.stubGlobal(
@@ -2368,8 +2385,11 @@ describe("factory:deploy-app", () => {
   });
 
   it("throws DeployFailure when Vercel API returns non-ok response", async () => {
-    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
-      await import("fs/promises");
+    const {
+      readdir: mockReaddir,
+      readFile: mockReadFile,
+      stat: mockStat,
+    } = await import("fs/promises");
 
     vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
     vi.mocked(mockStat).mockResolvedValueOnce({
@@ -2382,9 +2402,7 @@ describe("factory:deploy-app", () => {
       Buffer.from("<html/>") as any,
     );
 
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.vercelAccessToken = { value: "bad-token" };
 
     vi.stubGlobal(
@@ -2403,8 +2421,11 @@ describe("factory:deploy-app", () => {
   });
 
   it("deploys to Netlify and returns url when token is present and API succeeds", async () => {
-    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
-      await import("fs/promises");
+    const {
+      readdir: mockReaddir,
+      readFile: mockReadFile,
+      stat: mockStat,
+    } = await import("fs/promises");
 
     // Simulate dist/ with a single file: index.html
     vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
@@ -2418,9 +2439,7 @@ describe("factory:deploy-app", () => {
       Buffer.from("<!doctype html><html/>") as any,
     );
 
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.netlifyAccessToken = { value: "test-netlify-token" };
 
     // Mock Netlify API: create site → create deploy (no required files) → done
@@ -2464,17 +2483,24 @@ describe("factory:deploy-app", () => {
   });
 
   it("throws DeployFailure when Netlify site creation fails", async () => {
-    const { readdir: mockReaddir, readFile: mockReadFile, stat: mockStat } =
-      await import("fs/promises");
+    const {
+      readdir: mockReaddir,
+      readFile: mockReadFile,
+      stat: mockStat,
+    } = await import("fs/promises");
 
     vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
-    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => true } as any);
-    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => false } as any);
-    vi.mocked(mockReadFile).mockResolvedValueOnce(Buffer.from("<html/>") as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => true,
+    } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({
+      isDirectory: () => false,
+    } as any);
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      Buffer.from("<html/>") as any,
+    );
 
-    mockDbState.rows = [
-      { id: 1, ideaJson: JSON.stringify(makeIdea()) },
-    ];
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.netlifyAccessToken = { value: "bad-token" };
 
     vi.stubGlobal(
@@ -2500,9 +2526,9 @@ describe("factory:deploy-app", () => {
 describe("factory:save-netlify-token", () => {
   it("throws Auth when token is empty", async () => {
     const handler = capturedHandlers.get("factory:save-netlify-token")!;
-    await expect(
-      handler(mockEvent, { token: "" }),
-    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+    await expect(handler(mockEvent, { token: "" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
   });
 
   it("throws Auth when Netlify API rejects the token (401)", async () => {
@@ -2563,5 +2589,440 @@ describe("factory:save-netlify-token", () => {
     expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
       netlifyAccessToken: { value: "netlify_pat_abc123" },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #12 — factory:save-lemonsqueezy-key
+// ---------------------------------------------------------------------------
+
+describe("factory:save-lemonsqueezy-key", () => {
+  it("throws Auth when key is empty", async () => {
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await expect(handler(mockEvent, { key: "" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
+  });
+
+  it("throws Auth when LemonSqueezy API rejects the key (401)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 401 }),
+    );
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await expect(handler(mockEvent, { key: "bad-key" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
+  });
+
+  it("throws Auth when LemonSqueezy API rejects the key (403)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+    );
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await expect(handler(mockEvent, { key: "bad-key" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
+  });
+
+  it("throws PaymentIngestFailure when LemonSqueezy API returns unexpected error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    );
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await expect(handler(mockEvent, { key: "some-key" })).rejects.toMatchObject(
+      { kind: DyadErrorKind.PaymentIngestFailure },
+    );
+  });
+
+  it("throws PaymentIngestFailure when network call throws (offline)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network error")),
+    );
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await expect(handler(mockEvent, { key: "some-key" })).rejects.toMatchObject(
+      { kind: DyadErrorKind.PaymentIngestFailure },
+    );
+  });
+
+  it("saves key to settings when LemonSqueezy API accepts the key", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: { id: "user_123" } }),
+      }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:save-lemonsqueezy-key")!;
+    await handler(mockEvent, { key: "  eyJ0eXAiOiJKV1QiLC_test  " });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      lemonSqueezyApiKey: { value: "eyJ0eXAiOiJKV1QiLC_test" },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #12 — factory:save-stripe-key
+// ---------------------------------------------------------------------------
+
+describe("factory:save-stripe-key", () => {
+  it("throws Auth when key is empty", async () => {
+    const handler = capturedHandlers.get("factory:save-stripe-key")!;
+    await expect(handler(mockEvent, { key: "" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
+  });
+
+  it("throws Auth when Stripe API rejects the key (401)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 401 }),
+    );
+    const handler = capturedHandlers.get("factory:save-stripe-key")!;
+    await expect(handler(mockEvent, { key: "bad-key" })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
+  });
+
+  it("throws PaymentIngestFailure when Stripe API returns unexpected error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 500 }),
+    );
+    const handler = capturedHandlers.get("factory:save-stripe-key")!;
+    await expect(handler(mockEvent, { key: "some-key" })).rejects.toMatchObject(
+      { kind: DyadErrorKind.PaymentIngestFailure },
+    );
+  });
+
+  it("throws PaymentIngestFailure when network call throws (offline)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network error")),
+    );
+    const handler = capturedHandlers.get("factory:save-stripe-key")!;
+    await expect(handler(mockEvent, { key: "some-key" })).rejects.toMatchObject(
+      { kind: DyadErrorKind.PaymentIngestFailure },
+    );
+  });
+
+  it("saves key to settings when Stripe API accepts the key", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ object: "balance" }),
+      }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:save-stripe-key")!;
+    await handler(mockEvent, { key: "  sk_test_abc123  " });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      stripeSecretKey: { value: "sk_test_abc123" },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #12 — factory:ingest-payments
+// ---------------------------------------------------------------------------
+
+describe("factory:ingest-payments", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("throws Auth when LemonSqueezy key is not configured", async () => {
+    mockSettingsState.lemonSqueezyApiKey = undefined;
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "lemonsqueezy" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Stripe key is not configured", async () => {
+    mockSettingsState.stripeSecretKey = undefined;
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "stripe" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("returns inserted=0 when LemonSqueezy returns no paid orders", async () => {
+    mockSettingsState.lemonSqueezyApiKey = { value: "ls_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: [], links: { next: null } }),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, {
+      runId: 1,
+      provider: "lemonsqueezy",
+    });
+
+    expect(result).toMatchObject({
+      inserted: 0,
+      revenueUsdCents: 0,
+      conversions: 0,
+    });
+  });
+
+  it("inserts 1 outcome row from LemonSqueezy paid orders", async () => {
+    mockSettingsState.lemonSqueezyApiKey = { value: "ls_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                id: "ord_1",
+                attributes: {
+                  status: "paid",
+                  total: 2999,
+                  currency: "USD",
+                  first_order_item: { product_name: "InvoicePro Pro" },
+                  created_at: "2025-01-15T10:00:00Z",
+                },
+              },
+              {
+                id: "ord_2",
+                attributes: {
+                  status: "paid",
+                  total: 2999,
+                  currency: "USD",
+                  first_order_item: { product_name: "InvoicePro Pro" },
+                  created_at: "2025-01-16T10:00:00Z",
+                },
+              },
+            ],
+            links: { next: null },
+          }),
+      }),
+    );
+
+    const { db: dbModule } = await import("@/db");
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, {
+      runId: 1,
+      provider: "lemonsqueezy",
+    });
+
+    expect(result).toMatchObject({
+      inserted: 1,
+      revenueUsdCents: 5998,
+      conversions: 2,
+    });
+    expect(vi.mocked(dbModule.transaction)).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters LemonSqueezy orders by fromTimestamp", async () => {
+    mockSettingsState.lemonSqueezyApiKey = { value: "ls_test_key" };
+    const futureTs = Math.floor(Date.now() / 1000) + 86400; // tomorrow
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [
+              {
+                id: "ord_old",
+                attributes: {
+                  status: "paid",
+                  total: 2999,
+                  currency: "USD",
+                  first_order_item: { product_name: "Test Product" },
+                  created_at: "2020-01-01T00:00:00Z",
+                },
+              },
+            ],
+            links: { next: null },
+          }),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, {
+      runId: 1,
+      provider: "lemonsqueezy",
+      fromTimestamp: futureTs,
+    });
+
+    expect(result).toMatchObject({
+      inserted: 0,
+      revenueUsdCents: 0,
+      conversions: 0,
+    });
+  });
+
+  it("returns inserted=0 when Stripe returns no charges", async () => {
+    mockSettingsState.stripeSecretKey = { value: "sk_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            object: "list",
+            data: [],
+            has_more: false,
+            url: "/v1/charges",
+          }),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, { runId: 1, provider: "stripe" });
+
+    expect(result).toMatchObject({
+      inserted: 0,
+      revenueUsdCents: 0,
+      conversions: 0,
+    });
+  });
+
+  it("inserts 1 outcome row from Stripe succeeded USD charges", async () => {
+    mockSettingsState.stripeSecretKey = { value: "sk_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            object: "list",
+            data: [
+              {
+                id: "ch_1",
+                amount: 4999,
+                currency: "usd",
+                status: "succeeded",
+                description: "InvoicePro UAE subscription",
+                created: 1_700_000_000,
+                metadata: {},
+              },
+            ],
+            has_more: false,
+            url: "/v1/charges",
+          }),
+      }),
+    );
+
+    const { db: dbModule } = await import("@/db");
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, { runId: 1, provider: "stripe" });
+
+    expect(result).toMatchObject({
+      inserted: 1,
+      revenueUsdCents: 4999,
+      conversions: 1,
+    });
+    expect(vi.mocked(dbModule.transaction)).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters Stripe charges by productName in description", async () => {
+    mockSettingsState.stripeSecretKey = { value: "sk_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            object: "list",
+            data: [
+              {
+                id: "ch_match",
+                amount: 2999,
+                currency: "usd",
+                status: "succeeded",
+                description: "InvoicePro Pro plan",
+                created: 1_700_000_000,
+                metadata: {},
+              },
+              {
+                id: "ch_no_match",
+                amount: 9999,
+                currency: "usd",
+                status: "succeeded",
+                description: "Unrelated product",
+                created: 1_700_000_001,
+                metadata: {},
+              },
+            ],
+            has_more: false,
+            url: "/v1/charges",
+          }),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    const result = await handler(mockEvent, {
+      runId: 1,
+      provider: "stripe",
+      productName: "invoicepro",
+    });
+
+    expect(result).toMatchObject({
+      inserted: 1,
+      revenueUsdCents: 2999,
+      conversions: 1,
+    });
+  });
+
+  it("throws PaymentIngestFailure when LemonSqueezy orders API returns error", async () => {
+    mockSettingsState.lemonSqueezyApiKey = { value: "ls_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve("Internal server error"),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "lemonsqueezy" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.PaymentIngestFailure });
+  });
+
+  it("throws PaymentIngestFailure when Stripe charges API returns error", async () => {
+    mockSettingsState.stripeSecretKey = { value: "sk_test_key" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 402,
+        text: () => Promise.resolve("Payment Required"),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-payments")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "stripe" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.PaymentIngestFailure });
   });
 });

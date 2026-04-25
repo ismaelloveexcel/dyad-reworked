@@ -45,6 +45,8 @@ export enum DyadErrorKind {
   LaunchKitFailure = "launch_kit_failure",
   /** factory:deployApp failed to deploy to Vercel or Netlify. */
   DeployFailure = "deploy_failure",
+  /** factory:ingest-payments failed to fetch or insert payment data. */
+  PaymentIngestFailure = "payment_ingest_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -68,6 +70,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.LaunchKitFailure,
   // Deploy failures are user-visible (bad token, quota, network), not bugs
   DyadErrorKind.DeployFailure,
+  // Payment ingest failures are user-visible (bad key, quota, network), not bugs
+  DyadErrorKind.PaymentIngestFailure,
 ]);
 
 /**

@@ -307,6 +307,10 @@ const BaseUserSettingsFields = {
   githubAccessToken: SecretSchema.optional(),
   vercelAccessToken: SecretSchema.optional(),
   netlifyAccessToken: SecretSchema.optional(),
+  // PR #12 — LemonSqueezy API key for payment ingest
+  lemonSqueezyApiKey: SecretSchema.optional(),
+  // PR #12 — Stripe secret key for payment ingest
+  stripeSecretKey: SecretSchema.optional(),
   supabase: SupabaseSchema.optional(),
   neon: NeonSchema.optional(),
   autoApproveChanges: z.boolean().optional(),

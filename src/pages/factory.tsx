@@ -456,6 +456,242 @@ function DeploySection({ result }: { result: IdeaEvaluationResult }) {
   );
 }
 
+// =============================================================================
+// PR #12 — Payments section — shown inside IdeaCard for BUILD ideas that have
+// been persisted.  Provides one-click revenue ingest from LemonSqueezy or
+// Stripe.  API keys are saved inline (similar to DeploySection / Netlify form).
+// =============================================================================
+
+function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
+  const runId = result.runId;
+
+  const [lsKey, setLsKey] = useState("");
+  const [showLsForm, setShowLsForm] = useState(false);
+  const [stripeKey, setStripeKey] = useState("");
+  const [showStripeForm, setShowStripeForm] = useState(false);
+
+  const saveLsMutation = useMutation({
+    mutationFn: (key: string) => factoryClient.saveLemonSqueezyKey({ key }),
+    onSuccess: () => {
+      setShowLsForm(false);
+      setLsKey("");
+    },
+  });
+
+  const saveStripeMutation = useMutation({
+    mutationFn: (key: string) => factoryClient.saveStripeKey({ key }),
+    onSuccess: () => {
+      setShowStripeForm(false);
+      setStripeKey("");
+    },
+  });
+
+  const ingestMutation = useMutation({
+    mutationFn: (provider: "lemonsqueezy" | "stripe") =>
+      factoryClient.ingestPayments({ runId: runId!, provider }),
+  });
+
+  if (!runId || runId <= 0) return null;
+
+  const { data, isPending, isError, error } = ingestMutation;
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          Payment Ingest
+        </p>
+        {data && data.inserted > 0 && (
+          <span className="text-xs text-emerald-400">✓ Synced</span>
+        )}
+      </div>
+
+      {/* Ingest buttons */}
+      <div className="flex gap-2 flex-wrap">
+        <button
+          onClick={() => ingestMutation.mutate("lemonsqueezy")}
+          disabled={isPending}
+          className="text-xs px-3 py-1.5 rounded-lg bg-yellow-900/40 text-yellow-300 hover:bg-yellow-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-yellow-800 transition-colors flex items-center gap-1.5"
+        >
+          {isPending && ingestMutation.variables === "lemonsqueezy" ? (
+            <>
+              <span className="w-3 h-3 rounded-full border-2 border-yellow-300/30 border-t-yellow-300 animate-spin" />
+              Syncing…
+            </>
+          ) : (
+            <>🍋 Sync LemonSqueezy</>
+          )}
+        </button>
+        <button
+          onClick={() => ingestMutation.mutate("stripe")}
+          disabled={isPending}
+          className="text-xs px-3 py-1.5 rounded-lg bg-purple-900/40 text-purple-300 hover:bg-purple-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-purple-800 transition-colors flex items-center gap-1.5"
+        >
+          {isPending && ingestMutation.variables === "stripe" ? (
+            <>
+              <span className="w-3 h-3 rounded-full border-2 border-purple-300/30 border-t-purple-300 animate-spin" />
+              Syncing…
+            </>
+          ) : (
+            <>⚡ Sync Stripe</>
+          )}
+        </button>
+      </div>
+
+      {isError && (
+        <p className="text-xs text-red-400 leading-relaxed">
+          {error instanceof Error ? error.message : "Payment sync failed."}
+        </p>
+      )}
+
+      {data && (
+        <div className="rounded-md bg-zinc-900 border border-zinc-700 px-3 py-2 text-xs text-zinc-300">
+          {data.inserted > 0 ? (
+            <span>
+              Synced{" "}
+              <span className="text-emerald-400 font-semibold">
+                {data.conversions} order{data.conversions !== 1 ? "s" : ""}
+              </span>
+              {" — "}
+              <span className="text-emerald-400 font-semibold">
+                ${(data.revenueUsdCents / 100).toFixed(2)} USD
+              </span>
+            </span>
+          ) : (
+            <span className="text-zinc-500 italic">
+              No matching orders found. Try saving your API key and syncing
+              again.
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* API key forms */}
+      <div className="pt-1 border-t border-zinc-800 space-y-3">
+        {/* LemonSqueezy */}
+        <div className="space-y-2">
+          <button
+            onClick={() => setShowLsForm((v) => !v)}
+            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            {showLsForm ? "▲ Hide LemonSqueezy key" : "⚙ Set LemonSqueezy key"}
+          </button>
+          {showLsForm && (
+            <div className="space-y-2">
+              <label
+                htmlFor="ls-key-input"
+                className="block text-xs text-zinc-400"
+              >
+                LemonSqueezy API key
+              </label>
+              <p
+                id="ls-key-help"
+                className="text-xs text-zinc-500"
+              >
+                Generate a key at{" "}
+                <span className="font-mono">
+                  app.lemonsqueezy.com → Settings → API
+                </span>
+                .
+              </p>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="ls-key-input"
+                  type="password"
+                  value={lsKey}
+                  onChange={(e) => setLsKey(e.target.value)}
+                  placeholder="eyJ0eXAiOiJKV1QiLC…"
+                  aria-describedby="ls-key-help"
+                  className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-yellow-700 transition-colors"
+                />
+                <button
+                  onClick={() => saveLsMutation.mutate(lsKey)}
+                  disabled={saveLsMutation.isPending || !lsKey.trim()}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-yellow-900/40 text-yellow-300 hover:bg-yellow-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-yellow-800 transition-colors shrink-0"
+                >
+                  {saveLsMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
+              {saveLsMutation.isError && (
+                <p className="text-xs text-red-400">
+                  {saveLsMutation.error instanceof Error
+                    ? saveLsMutation.error.message
+                    : "Failed to save key."}
+                </p>
+              )}
+              {saveLsMutation.isSuccess && (
+                <p className="text-xs text-yellow-400">
+                  LemonSqueezy key saved.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Stripe */}
+        <div className="space-y-2">
+          <button
+            onClick={() => setShowStripeForm((v) => !v)}
+            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            {showStripeForm ? "▲ Hide Stripe key" : "⚙ Set Stripe key"}
+          </button>
+          {showStripeForm && (
+            <div className="space-y-2">
+              <label
+                htmlFor="stripe-key-input"
+                className="block text-xs text-zinc-400"
+              >
+                Stripe secret key
+              </label>
+              <p
+                id="stripe-key-help"
+                className="text-xs text-zinc-500"
+              >
+                Find your key at{" "}
+                <span className="font-mono">
+                  dashboard.stripe.com → Developers → API keys
+                </span>
+                ; it starts with{" "}
+                <span className="font-mono">sk_live_…</span> or{" "}
+                <span className="font-mono">sk_test_…</span>.
+              </p>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="stripe-key-input"
+                  type="password"
+                  value={stripeKey}
+                  onChange={(e) => setStripeKey(e.target.value)}
+                  placeholder="sk_live_…"
+                  aria-describedby="stripe-key-help"
+                  className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-purple-700 transition-colors"
+                />
+                <button
+                  onClick={() => saveStripeMutation.mutate(stripeKey)}
+                  disabled={saveStripeMutation.isPending || !stripeKey.trim()}
+                  className="text-xs px-3 py-1.5 rounded-lg bg-purple-900/40 text-purple-300 hover:bg-purple-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-purple-800 transition-colors shrink-0"
+                >
+                  {saveStripeMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
+              {saveStripeMutation.isError && (
+                <p className="text-xs text-red-400">
+                  {saveStripeMutation.error instanceof Error
+                    ? saveStripeMutation.error.message
+                    : "Failed to save key."}
+                </p>
+              )}
+              {saveStripeMutation.isSuccess && (
+                <p className="text-xs text-purple-400">Stripe key saved.</p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
@@ -883,6 +1119,11 @@ function IdeaCard({
       {/* PR #11 — One-click deploy to Vercel / Netlify (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <DeploySection result={result} />
+      )}
+
+      {/* PR #12 — Payment ingest from LemonSqueezy / Stripe (BUILD ideas that have been persisted) */}
+      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+        <PaymentsSection result={result} />
       )}
 
       {/* PR #10 — Launch kit (BUILD ideas that have been persisted) */}
