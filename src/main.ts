@@ -50,6 +50,10 @@ import { cleanupOldMediaFiles } from "./ipc/utils/media_cleanup";
 import fs from "fs";
 import { gitAddSafeDirectory } from "./ipc/utils/git_utils";
 import { getDyadAppsBaseDirectory, getDyadAppPath } from "./paths/paths";
+import {
+  startNightlyScheduler,
+  stopNightlyScheduler,
+} from "./ipc/handlers/factory_nightly";
 
 log.errorHandler.startCatching();
 log.eventLogger.startLogging();
@@ -184,6 +188,10 @@ export async function onReady() {
     logger.error("Error initializing backup manager", e);
   }
   initializeDatabase();
+
+  // PR #13 — Start the nightly outcome ingest scheduler.  Must run after the
+  // database is initialized so DB queries inside the scheduler succeed.
+  startNightlyScheduler();
 
   // Cleanup old ai_messages_json entries to prevent database bloat
   cleanupOldAiMessagesJson();
@@ -760,6 +768,9 @@ app.on("will-quit", () => {
 
   // Stop performance monitoring and capture final metrics
   stopPerformanceMonitoring();
+
+  // Stop the nightly ingest scheduler so its interval is cleared.
+  stopNightlyScheduler();
 
   writeSettings({ isRunning: false });
 });

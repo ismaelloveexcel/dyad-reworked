@@ -411,6 +411,64 @@ export const factoryContracts = {
       conversions: z.number(),
     }),
   }),
+  // PR #13 — Save Plausible analytics API key + site ID to encrypted settings.
+  savePlausibleConfig: defineContract({
+    channel: "factory:save-plausible-config",
+    input: z.object({
+      /** Plausible API key (Bearer token). */
+      key: z.string(),
+      /** Plausible site domain, e.g. "example.com" (without https://). */
+      siteId: z.string(),
+    }),
+    output: z.void(),
+  }),
+  // PR #13 — Ingest Plausible analytics (pageviews) for a run into launch_outcomes.
+  // Fetches aggregate stats for the configured site ID and upserts a row with
+  // source="plausible" and the views count.
+  ingestAnalytics: defineContract({
+    channel: "factory:ingest-analytics",
+    input: z.object({
+      runId: z.number().int().positive(),
+      /** Plausible stats period, e.g. "30d", "7d", "month". Defaults to "30d". */
+      period: z.string().optional(),
+    }),
+    output: z.object({
+      /** Number of launch_outcomes rows inserted (0 if analytics returned no data). */
+      inserted: z.number(),
+      /** Total pageviews fetched from Plausible. */
+      views: z.number(),
+    }),
+  }),
+  // PR #13 — Get nightly ingest job status (last run, next run, enabled flag).
+  getNightlyStatus: defineContract({
+    channel: "factory:get-nightly-status",
+    input: z.object({}),
+    output: z.object({
+      /** Unix seconds when the nightly job last completed, or null if never run. */
+      lastRanAt: z.number().nullable(),
+      /** Approximate unix seconds when the next run is scheduled, or null if disabled. */
+      nextRunAt: z.number().nullable(),
+      /** Whether the nightly job is enabled. */
+      enabled: z.boolean(),
+    }),
+  }),
+  // PR #13 — Manually trigger a nightly ingest cycle immediately.
+  runNightlyNow: defineContract({
+    channel: "factory:run-nightly-now",
+    input: z.object({}),
+    output: z.object({
+      /** Unix seconds when this run completed. */
+      ranAt: z.number(),
+      /** Number of LAUNCHED runs that were checked. */
+      runsChecked: z.number(),
+    }),
+  }),
+  // PR #13 — Enable or disable the nightly ingest job.
+  toggleNightlyJob: defineContract({
+    channel: "factory:toggle-nightly-job",
+    input: z.object({ enabled: z.boolean() }),
+    output: z.void(),
+  }),
 } as const;
 
 // =============================================================================

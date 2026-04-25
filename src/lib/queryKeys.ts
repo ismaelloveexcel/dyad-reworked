@@ -352,6 +352,8 @@ export const queryKeys = {
     launchKit: (runId: number) => ["factory", "launchKit", runId] as const,
     deploy: (runId: number) => ["factory", "deploy", runId] as const,
     payments: (runId: number) => ["factory", "payments", runId] as const,
+    analytics: (runId: number) => ["factory", "analytics", runId] as const,
+    nightlyStatus: ["factory", "nightlyStatus"] as const,
   },
 } as const;
 

@@ -311,6 +311,14 @@ const BaseUserSettingsFields = {
   lemonSqueezyApiKey: SecretSchema.optional(),
   // PR #12 — Stripe secret key for payment ingest
   stripeSecretKey: SecretSchema.optional(),
+  // PR #13 — Plausible analytics API key for outcome ingest
+  plausibleApiKey: SecretSchema.optional(),
+  // PR #13 — Plausible site domain (e.g. "example.com") for analytics ingest
+  plausibleSiteId: z.string().optional(),
+  // PR #13 — Nightly outcome ingest job: enabled flag (default true)
+  factoryNightlyJobEnabled: z.boolean().optional(),
+  // PR #13 — Unix seconds when the nightly job last completed successfully
+  factoryNightlyLastRanAt: z.number().int().optional(),
   supabase: SupabaseSchema.optional(),
   neon: NeonSchema.optional(),
   autoApproveChanges: z.boolean().optional(),
