@@ -51,8 +51,9 @@ describe("extractPatterns — operator-precedence regression", () => {
     });
     const [entry] = extractPatterns([idea], [], []);
     // Schema says `revenue: string | undefined`. Before the fix this was the
-    // number `1`. After the fix it is the string "1" so it both satisfies the
-    // type and remains numerically truthy for downstream `> 0` checks.
+    // number `1` (operator-precedence bug). After the fix it is the string "1",
+    // which both satisfies the type and registers as a positive signal in
+    // `hasRevenueSignal` (matches /[1-9]/).
     expect(entry.revenue).toBe("1");
     expect(typeof entry.revenue).toBe("string");
   });
@@ -80,6 +81,27 @@ describe("extractPatterns — operator-precedence regression", () => {
     const idea = makeIdea();
     const [entry] = extractPatterns([idea], [], []);
     expect(entry.revenue).toBeUndefined();
+  });
+
+  it("treats blank traction.revenue as unset and falls back to launchOutcome", () => {
+    // Traction entries default to revenue: "" — a user editing other
+    // traction fields must not accidentally suppress the launchOutcome signal.
+    const idea = makeIdea({
+      launchOutcome: { launched: true, revenueGenerated: true, notes: "" },
+    });
+    const traction: TractionEntry[] = [
+      {
+        name: idea.name,
+        revenue: "   ",
+        views: "1000",
+        users: "",
+        sales: "",
+        shares: "",
+        notes: "",
+      },
+    ];
+    const [entry] = extractPatterns([idea], [], traction);
+    expect(entry.revenue).toBe("1");
   });
 
   it("honours pipeline + runStatus when assigning status", () => {

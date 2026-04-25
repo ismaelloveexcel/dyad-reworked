@@ -97,8 +97,9 @@ function saveTraction(items: TractionEntry[]) {
 // =============================================================================
 
 // `revenue` on PatternEntry is a free-text string ("$5,000", "1", "yes", …).
-// We treat any non-empty value with at least one digit, or the literal "yes",
-// as a positive revenue signal for the pattern-weighting boost.
+// We treat any value containing a non-zero digit (1-9), or the literal "yes",
+// as a positive revenue signal for the pattern-weighting boost. Bare "0",
+// "no", and empty strings are explicitly excluded.
 function hasRevenueSignal(revenue: string | undefined): boolean {
   if (!revenue) return false;
   const trimmed = revenue.trim().toLowerCase();
@@ -144,8 +145,11 @@ export function extractPatterns(
       revenueScore: item.scores.monetisation,
       status,
       revenue:
-        te?.revenue ??
-        (item.launchOutcome?.revenueGenerated ? "1" : undefined),
+        te?.revenue?.trim()
+          ? te.revenue
+          : item.launchOutcome?.revenueGenerated
+            ? "1"
+            : undefined,
       shares: te?.shares,
     };
     return entry;
