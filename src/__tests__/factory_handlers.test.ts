@@ -135,13 +135,15 @@ vi.mock("@/db", () => {
       update: vi.fn().mockImplementation(() => makeChain()),
       // PR #12 — transaction mock: executes the callback with a tx proxy that
       // exposes the same chain API so delete+insert inside transaction() work.
-      transaction: vi.fn().mockImplementation((fn: (tx: unknown) => Promise<unknown>) => {
-        const txProxy = {
-          insert: vi.fn().mockImplementation(() => makeChain()),
-          delete: vi.fn().mockImplementation(() => makeChain()),
-        };
-        return fn(txProxy);
-      }),
+      transaction: vi
+        .fn()
+        .mockImplementation((fn: (tx: unknown) => Promise<unknown>) => {
+          const txProxy = {
+            insert: vi.fn().mockImplementation(() => makeChain()),
+            delete: vi.fn().mockImplementation(() => makeChain()),
+          };
+          return fn(txProxy);
+        }),
     },
   };
 });
@@ -192,6 +194,8 @@ const mockSettingsState = vi.hoisted(() => ({
   // PR #13 — nightly job state
   factoryNightlyJobEnabled: true as boolean | undefined,
   factoryNightlyLastRanAt: undefined as number | undefined,
+  // PR #14 — outcome-weighted scoring feature flag
+  factoryOutcomeWeightedScoring: false as boolean | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
@@ -209,6 +213,8 @@ vi.mock("@/main/settings", () => ({
     plausibleSiteId: mockSettingsState.plausibleSiteId,
     factoryNightlyJobEnabled: mockSettingsState.factoryNightlyJobEnabled,
     factoryNightlyLastRanAt: mockSettingsState.factoryNightlyLastRanAt,
+    factoryOutcomeWeightedScoring:
+      mockSettingsState.factoryOutcomeWeightedScoring,
   })),
   // PR #11 — writeSettings mock for factory:save-netlify-token
   writeSettings: vi.fn(),
@@ -348,6 +354,8 @@ beforeEach(() => {
   mockSettingsState.plausibleSiteId = undefined;
   mockSettingsState.factoryNightlyJobEnabled = true;
   mockSettingsState.factoryNightlyLastRanAt = undefined;
+  // PR #14 — reset outcome-weighted scoring flag
+  mockSettingsState.factoryOutcomeWeightedScoring = false;
   // Reset fetchEmbedding to its default implementation
   mockFetchEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   vi.clearAllMocks();
@@ -3156,18 +3164,18 @@ describe("factory:ingest-analytics", () => {
   it("throws Auth when Plausible API key is not configured", async () => {
     mockSettingsState.plausibleApiKey = undefined;
     const handler = capturedHandlers.get("factory:ingest-analytics")!;
-    await expect(
-      handler(mockEvent, { runId: 1 }),
-    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+    await expect(handler(mockEvent, { runId: 1 })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
   });
 
   it("throws Auth when Plausible site ID is not configured", async () => {
     mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
     mockSettingsState.plausibleSiteId = undefined;
     const handler = capturedHandlers.get("factory:ingest-analytics")!;
-    await expect(
-      handler(mockEvent, { runId: 1 }),
-    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+    await expect(handler(mockEvent, { runId: 1 })).rejects.toMatchObject({
+      kind: DyadErrorKind.Auth,
+    });
   });
 
   it("returns inserted=0 when Plausible returns 0 pageviews", async () => {
@@ -3234,9 +3242,9 @@ describe("factory:ingest-analytics", () => {
     );
 
     const handler = capturedHandlers.get("factory:ingest-analytics")!;
-    await expect(
-      handler(mockEvent, { runId: 1 }),
-    ).rejects.toMatchObject({ kind: DyadErrorKind.AnalyticsIngestFailure });
+    await expect(handler(mockEvent, { runId: 1 })).rejects.toMatchObject({
+      kind: DyadErrorKind.AnalyticsIngestFailure,
+    });
   });
 
   it("uses custom period when provided", async () => {
@@ -3410,5 +3418,231 @@ describe("factory:toggle-nightly-job", () => {
     expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
       factoryNightlyJobEnabled: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #14 — factory:toggle-outcome-weighted-scoring
+// ---------------------------------------------------------------------------
+
+describe("factory:toggle-outcome-weighted-scoring", () => {
+  it("writes factoryOutcomeWeightedScoring=true to settings", async () => {
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get(
+      "factory:toggle-outcome-weighted-scoring",
+    )!;
+    await handler(mockEvent, { enabled: true });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      factoryOutcomeWeightedScoring: true,
+    });
+  });
+
+  it("writes factoryOutcomeWeightedScoring=false to settings", async () => {
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get(
+      "factory:toggle-outcome-weighted-scoring",
+    )!;
+    await handler(mockEvent, { enabled: false });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      factoryOutcomeWeightedScoring: false,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #14 — factory:evaluate-idea outcome-weighted scoring
+// ---------------------------------------------------------------------------
+
+describe("factory:evaluate-idea — PR #14 outcome-weighted scoring", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("does NOT inject outcome context when factoryOutcomeWeightedScoring=false (default)", async () => {
+    mockSettingsState.factoryOutcomeWeightedScoring = false;
+    process.env.OPENAI_API_KEY = "sk-valid";
+
+    const captured: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: unknown, opts: { body: string }) => {
+        const body = JSON.parse(opts.body) as {
+          messages: { content: string }[];
+        };
+        const prompt =
+          body.messages?.[1]?.content ?? body.messages?.[0]?.content ?? "";
+        captured.push(prompt);
+        const content = JSON.stringify(makeIdea());
+        return Promise.resolve(makeFakeOpenAIResponse(content));
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    });
+
+    // No outcome context block should appear in any captured prompt
+    for (const p of captured) {
+      expect(p).not.toContain("OUTCOME DATA FROM");
+    }
+  });
+
+  it("injects outcome context when factoryOutcomeWeightedScoring=true and similar runs have outcomes", async () => {
+    mockSettingsState.factoryOutcomeWeightedScoring = true;
+    process.env.OPENAI_API_KEY = "sk-valid";
+    registerFactoryHandlers();
+
+    // Provide a stored run with an embedding so the similarity scan finds it
+    const storedIdea = makeIdea({ name: "Similar Idea" });
+    const storedEmbedding = JSON.stringify([0.1, 0.2, 0.3]); // matches mockFetchEmbedding default
+    const outcomesForRun = [
+      {
+        id: 1,
+        runId: 5,
+        revenueUsd: 500,
+        conversions: 3,
+        views: 1000,
+        churn30d: null,
+        source: "stripe",
+        capturedAt: 1_700_000_000,
+      },
+    ];
+
+    const { db } = await import("@/db");
+    let selectCallCount = 0;
+    vi.mocked(db.select).mockImplementation((() => {
+      selectCallCount++;
+      let rows: unknown[];
+      if (selectCallCount === 1) {
+        // First select: stored runs with embeddings
+        rows = [
+          {
+            id: 5,
+            ideaJson: JSON.stringify(storedIdea),
+            embedding: storedEmbedding,
+          },
+        ];
+      } else {
+        // Subsequent selects: launch_outcomes for each run
+        rows = outcomesForRun;
+      }
+      const chain: Record<string, unknown> = {
+        from: (..._: unknown[]) => chain,
+        where: (..._: unknown[]) => chain,
+        orderBy: (..._: unknown[]) => chain,
+        set: (..._: unknown[]) => chain,
+        values: (..._: unknown[]) => chain,
+        limit: (..._: unknown[]) => Promise.resolve(rows),
+        returning: (..._: unknown[]) =>
+          Promise.resolve([{ id: mockDbState.insertedId }]),
+        // eslint-disable-next-line unicorn/no-thenable
+        then: (
+          resolve: (v: unknown) => unknown,
+          reject?: (e: unknown) => unknown,
+        ) => Promise.resolve(rows).then(resolve, reject),
+      };
+      return chain as unknown as ReturnType<typeof db.select>;
+    }) as any);
+
+    const capturedPrompts: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: unknown, opts: { body: string }) => {
+        const body = JSON.parse(opts.body) as {
+          messages: { content: string }[];
+        };
+        // user prompt is messages[1] for OpenAI (system is [0])
+        const prompt =
+          body.messages?.[1]?.content ?? body.messages?.[0]?.content ?? "";
+        capturedPrompts.push(prompt);
+        const content = JSON.stringify(makeIdea());
+        return Promise.resolve(makeFakeOpenAIResponse(content));
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { outcomeWeightedUsed?: boolean };
+
+    // Outcome context should have been injected into the prompt
+    expect(capturedPrompts.some((p) => p.includes("OUTCOME DATA FROM"))).toBe(
+      true,
+    );
+    expect(result.outcomeWeightedUsed).toBe(true);
+  });
+
+  it("sets outcomeWeightedUsed=undefined (not tagged) when no outcome data found", async () => {
+    mockSettingsState.factoryOutcomeWeightedScoring = true;
+    process.env.OPENAI_API_KEY = "sk-valid";
+    registerFactoryHandlers();
+
+    // No stored runs → empty embedding scan
+    const { db } = await import("@/db");
+    vi.mocked(db.select).mockImplementation((() => {
+      const chain: Record<string, unknown> = {
+        from: (..._: unknown[]) => chain,
+        where: (..._: unknown[]) => chain,
+        orderBy: (..._: unknown[]) => chain,
+        limit: (..._: unknown[]) => Promise.resolve([]),
+        returning: (..._: unknown[]) =>
+          Promise.resolve([{ id: mockDbState.insertedId }]),
+        // eslint-disable-next-line unicorn/no-thenable
+        then: (
+          resolve: (v: unknown) => unknown,
+          reject?: (e: unknown) => unknown,
+        ) => Promise.resolve([]).then(resolve, reject),
+      };
+      return chain as unknown as ReturnType<typeof db.select>;
+    }) as any);
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(makeFakeOpenAIResponse(JSON.stringify(makeIdea()))),
+    );
+
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { outcomeWeightedUsed?: boolean };
+
+    // No outcome data → outcomeWeightedUsed should be falsy
+    expect(result.outcomeWeightedUsed).toBeFalsy();
+  });
+
+  it("falls back gracefully when embedding fetch fails silently (MissingApiKey suppressed)", async () => {
+    mockSettingsState.factoryOutcomeWeightedScoring = true;
+    // Keep a valid API key so the main evaluate path succeeds; only the embedding
+    // fetch fails (simulating missing embeddings key when outcome-weighting is on
+    // but the user hasn't yet configured a separate embeddings key).
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const { DyadError: DyadErrorClass, DyadErrorKind: DK } =
+      await import("@/errors/dyad_error");
+    mockFetchEmbedding.mockRejectedValueOnce(
+      new DyadErrorClass("OPENAI_API_KEY is not set.", DK.MissingApiKey),
+    );
+
+    registerFactoryHandlers();
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(makeFakeOpenAIResponse(JSON.stringify(makeIdea()))),
+    );
+
+    const handler = capturedHandlers.get("factory:evaluate-idea")!;
+    // Should succeed without outcome context (embedding failure is non-fatal)
+    const result = (await handler(mockEvent, {
+      idea: "Invoice automation for Dubai freelancers",
+    })) as { fallbackUsed: boolean; outcomeWeightedUsed?: boolean };
+    expect(typeof result.fallbackUsed).toBe("boolean");
+    // outcomeWeightedUsed should NOT be set because context could not be built
+    expect(result.outcomeWeightedUsed).toBeFalsy();
   });
 });

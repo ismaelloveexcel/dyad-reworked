@@ -31,7 +31,7 @@ import {
   deserializeEmbedding,
 } from "@/core/factory/embeddings";
 import { fetchEmbedding } from "./factory_embeddings";
-import { readSettings } from "@/main/settings";
+import { readSettings, writeSettings } from "@/main/settings";
 import {
   PROMPT_VERSION,
   CURRENT_PROMPT_HASH,
@@ -45,6 +45,10 @@ import {
   factorySlugFromName,
 } from "@/core/factory/main";
 import { registerFactoryDeployHandlers } from "./factory_deploy";
+import {
+  buildOutcomeContext,
+  type SimilarRunOutcomeData,
+} from "@/core/factory/outcome_scoring";
 
 const logger = log.scope("factory_handlers");
 
@@ -479,9 +483,118 @@ function isUserVisibleFactoryError(err: unknown): boolean {
 
 export function registerFactoryHandlers() {
   createTypedHandler(factoryContracts.evaluateIdea, async (_, { idea }) => {
+    // PR #14 — Outcome-weighted scoring: when the feature flag is enabled and
+    // OPENAI_API_KEY is present, fetch similar past runs, load their outcome
+    // data, and inject a context block into the LLM scoring prompt.
+    const settings = readSettings();
+    const outcomeWeightingEnabled =
+      settings.factoryOutcomeWeightedScoring === true;
+    let outcomeContext = "";
+    let outcomeWeightedUsed = false;
+
+    if (outcomeWeightingEnabled) {
+      try {
+        const ideaText = idea.trim();
+        const queryVec = await fetchEmbedding(ideaText);
+
+        // Load all rows with embeddings — same scan pattern as saveRun / getSimilarRuns
+        const storedRows = await db
+          .select({
+            id: factoryRuns.id,
+            ideaJson: factoryRuns.ideaJson,
+            embedding: factoryRuns.embedding,
+          })
+          .from(factoryRuns)
+          .where(isNotNull(factoryRuns.embedding));
+
+        // Top-5 most similar past runs (exclude exact same text by sim < 1.0)
+        const OUTCOME_SIMILAR_LIMIT = 5;
+        type ScoredRow = { id: number; ideaJson: string; similarity: number };
+        const topK: ScoredRow[] = [];
+        let minSim = -Infinity;
+
+        for (const row of storedRows) {
+          const vec = deserializeEmbedding(row.embedding!);
+          if (vec.length === 0) continue;
+          const sim = cosineSimilarity(queryVec, vec);
+          if (topK.length < OUTCOME_SIMILAR_LIMIT || sim > minSim) {
+            topK.push({ id: row.id, ideaJson: row.ideaJson, similarity: sim });
+            topK.sort((a, b) => b.similarity - a.similarity);
+            if (topK.length > OUTCOME_SIMILAR_LIMIT) topK.pop();
+            minSim =
+              topK.length > 0 ? topK[topK.length - 1].similarity : -Infinity;
+          }
+        }
+
+        if (topK.length > 0) {
+          // Load outcomes for each top-K run in parallel
+          const outcomeRows = await Promise.all(
+            topK.map(async (row) => {
+              const outcomes = await db
+                .select()
+                .from(launchOutcomes)
+                .where(eq(launchOutcomes.runId, row.id))
+                .orderBy(desc(launchOutcomes.capturedAt));
+
+              let name = "Unknown";
+              try {
+                const parsed = JSON.parse(row.ideaJson) as { name?: string };
+                if (parsed.name) name = parsed.name;
+              } catch {
+                // ignore parse errors
+              }
+
+              const outcomesTyped = outcomes.map((o) => ({
+                id: o.id,
+                runId: o.runId,
+                revenueUsd: o.revenueUsd ?? null,
+                conversions: o.conversions ?? null,
+                views: o.views ?? null,
+                churn30d: o.churn30d ?? null,
+                source: o.source ?? null,
+                capturedAt:
+                  o.capturedAt instanceof Date
+                    ? Math.floor(o.capturedAt.getTime() / 1000)
+                    : (o.capturedAt as number),
+              }));
+
+              return {
+                runId: row.id,
+                similarity: row.similarity,
+                name,
+                outcomes: outcomesTyped,
+              } satisfies SimilarRunOutcomeData;
+            }),
+          );
+
+          outcomeContext = buildOutcomeContext(outcomeRows);
+          if (outcomeContext) {
+            outcomeWeightedUsed = true;
+          }
+        }
+      } catch (outcomeErr) {
+        // Outcome-weighted scoring is non-fatal — fall through to standard prompt
+        // MissingApiKey is an expected state when OPENAI_API_KEY is absent
+        if (
+          !(
+            outcomeErr instanceof DyadError &&
+            outcomeErr.kind === DyadErrorKind.MissingApiKey
+          )
+        ) {
+          logger.warn(
+            "[factory] outcome-weighted scoring fetch failed, falling back to standard prompt:",
+            outcomeErr,
+          );
+        }
+      }
+    }
+
     try {
-      const raw = await callWithRetry(EVALUATE_PROMPT(idea));
-      return enrichResult(validateIdeaResult(raw, idea));
+      const raw = await callWithRetry(EVALUATE_PROMPT(idea, outcomeContext));
+      const result = enrichResult(validateIdeaResult(raw, idea));
+      return outcomeWeightedUsed
+        ? { ...result, outcomeWeightedUsed: true }
+        : result;
     } catch (err) {
       if (isUserVisibleFactoryError(err)) throw err;
       logger.warn("LLM provider unavailable, using fallback scoring:", err);
@@ -1469,6 +1582,21 @@ export function registerFactoryHandlers() {
 
   // PR #11 — One-click deploy handlers (Vercel + Netlify)
   registerFactoryDeployHandlers();
+
+  // ===========================================================================
+  // PR #14 — Outcome-weighted scoring toggle
+  // Persists the factoryOutcomeWeightedScoring feature flag via writeSettings.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.toggleOutcomeWeightedScoring,
+    async (_, { enabled }) => {
+      writeSettings({ factoryOutcomeWeightedScoring: enabled });
+      logger.log(
+        `[factory] outcome-weighted scoring ${enabled ? "enabled" : "disabled"} by user.`,
+      );
+    },
+  );
 }
 
 // =============================================================================

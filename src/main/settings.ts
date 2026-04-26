@@ -61,6 +61,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   factoryEmbeddingSimilarityThreshold: 0.92,
   // PR #13 — Nightly outcome ingest job: enabled by default.
   factoryNightlyJobEnabled: true,
+  // PR #14 — Outcome-weighted scoring: disabled by default until the user has
+  // enough outcome data to make the signal useful.
+  factoryOutcomeWeightedScoring: false,
 };
 
 const SETTINGS_FILE = "user-settings.json";

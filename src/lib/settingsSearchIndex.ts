@@ -42,6 +42,7 @@ export const SETTING_IDS = {
   factoryScoreThreshold: "setting-factory-score-threshold",
   factoryProvider: "setting-factory-provider",
   factoryEmbeddingDedup: "setting-factory-embedding-dedup",
+  factoryOutcomeWeightedScoring: "setting-factory-outcome-weighted-scoring",
   reset: "setting-reset",
 } as const;
 
@@ -440,6 +441,25 @@ export const SETTINGS_SEARCH_INDEX: SearchableSettingItem[] = [
       "novelty",
       "duplicate",
       "semantic",
+    ],
+    sectionId: SECTION_IDS.workflow,
+    sectionLabel: "Workflow",
+  },
+  {
+    id: SETTING_IDS.factoryOutcomeWeightedScoring,
+    label: "Factory Outcome-Weighted Scoring",
+    description:
+      "Inject real revenue and conversion data from similar past ideas into the LLM scoring prompt. Requires OPENAI_API_KEY and outcome data from the nightly ingest job.",
+    keywords: [
+      "factory",
+      "outcome",
+      "scoring",
+      "revenue",
+      "weighted",
+      "feedback",
+      "loop",
+      "ab",
+      "test",
     ],
     sectionId: SECTION_IDS.workflow,
     sectionLabel: "Workflow",

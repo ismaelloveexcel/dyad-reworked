@@ -39,6 +39,7 @@ import { CloudSandboxExperimentSwitch } from "@/components/CloudSandboxExperimen
 import { FactoryScoreThresholdSetting } from "@/components/FactoryScoreThresholdSetting";
 import { FactoryProviderSetting } from "@/components/FactoryProviderSetting";
 import { FactoryEmbeddingDedupSwitch } from "@/components/FactoryEmbeddingDedupSwitch";
+import { FactoryOutcomeWeightedScoringSwitch } from "@/components/FactoryOutcomeWeightedScoringSwitch";
 import { useSetAtom } from "jotai";
 import { activeSettingsSectionAtom } from "@/atoms/viewAtoms";
 import { SECTION_IDS, SETTING_IDS } from "@/lib/settingsSearchIndex";
@@ -446,6 +447,13 @@ export function WorkflowSettings() {
 
       <div id={SETTING_IDS.factoryEmbeddingDedup} className="space-y-1 mt-4">
         <FactoryEmbeddingDedupSwitch />
+      </div>
+
+      <div
+        id={SETTING_IDS.factoryOutcomeWeightedScoring}
+        className="space-y-1 mt-4"
+      >
+        <FactoryOutcomeWeightedScoringSwitch />
       </div>
     </div>
   );

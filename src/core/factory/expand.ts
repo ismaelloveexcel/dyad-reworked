@@ -29,10 +29,10 @@ export const PROMPT_VERSION = "v3.2";
 // Prompt templates
 // =============================================================================
 
-export const EVALUATE_PROMPT = (idea: string) => `
+export const EVALUATE_PROMPT = (idea: string, outcomeContext = "") => `
 Evaluate this app idea for a solo developer: "${idea}"
 
-Respond with ONLY this JSON object (no markdown, no code blocks):
+${outcomeContext ? `${outcomeContext}\n` : ""}Respond with ONLY this JSON object (no markdown, no code blocks):
 
 {
   "name": "Short product name (max 5 words)",
