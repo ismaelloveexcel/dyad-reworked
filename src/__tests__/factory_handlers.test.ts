@@ -3363,7 +3363,12 @@ describe("factory:run-nightly-now", () => {
     // Simulate an in-progress cycle by firing two concurrent invocations.
     // The second one must return quickly with runsChecked=0 rather than
     // starting a parallel ingest.
-    mockDbState.rows = [];
+    //
+    // Because the guard sets isRunning=true synchronously before the first
+    // await, the second call always sees isRunning=true when it starts.
+    // Use a non-empty row set so the first call returns runsChecked=1 and
+    // the skipped call returns runsChecked=0.
+    mockDbState.rows = [{ id: 10 }];
 
     const handler = capturedHandlers.get("factory:run-nightly-now")!;
 
@@ -3373,9 +3378,10 @@ describe("factory:run-nightly-now", () => {
       handler(mockEvent, {}) as Promise<{ runsChecked: number }>,
     ]);
 
-    // At least one result must be runsChecked=0 (the one that was skipped).
-    const skipped = [first, second].find((r) => r.runsChecked === 0);
-    expect(skipped).toBeDefined();
+    // Exactly one call should have been the "active" run (runsChecked=1)
+    // and the other should have been skipped (runsChecked=0).
+    const results = [first.runsChecked, second.runsChecked].sort();
+    expect(results).toEqual([0, 1]);
   });
 });
 

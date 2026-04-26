@@ -53,12 +53,15 @@ export async function runNightlyIngest(): Promise<{
   ranAt: number;
   runsChecked: number;
 }> {
+  // Guard against overlapping cycles.  In JavaScript's single-threaded event
+  // loop the check and the assignment below are effectively atomic: no `await`
+  // exists between them, so no other call can interleave and pass the guard
+  // before `isRunning` is set to true.
   if (isRunning) {
     logger.log("Nightly ingest: cycle already in progress, skipping.");
     const ranAt = Math.floor(Date.now() / 1000);
     return { ranAt, runsChecked: 0 };
   }
-
   isRunning = true;
   logger.log("Nightly ingest: starting cycle");
 
