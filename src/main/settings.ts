@@ -59,6 +59,8 @@ const DEFAULT_SETTINGS: UserSettings = {
   factoryEmbeddingDedup: true,
   // PR #9 — Similarity threshold for semantic dedup: 0.92 by default.
   factoryEmbeddingSimilarityThreshold: 0.92,
+  // PR #13 — Nightly outcome ingest job: enabled by default.
+  factoryNightlyJobEnabled: true,
 };
 
 const SETTINGS_FILE = "user-settings.json";
@@ -181,6 +183,13 @@ export function readSettings(): UserSettings {
         encryptionType,
       };
     }
+    if (combinedSettings.plausibleApiKey) {
+      const encryptionType = combinedSettings.plausibleApiKey.encryptionType;
+      combinedSettings.plausibleApiKey = {
+        value: decrypt(combinedSettings.plausibleApiKey),
+        encryptionType,
+      };
+    }
     for (const provider in combinedSettings.providerSettings) {
       if (combinedSettings.providerSettings[provider].apiKey) {
         const encryptionType =
@@ -267,6 +276,9 @@ export function writeSettings(settings: Partial<UserSettings>): void {
     }
     if (newSettings.stripeSecretKey) {
       newSettings.stripeSecretKey = encrypt(newSettings.stripeSecretKey.value);
+    }
+    if (newSettings.plausibleApiKey) {
+      newSettings.plausibleApiKey = encrypt(newSettings.plausibleApiKey.value);
     }
     if (newSettings.supabase) {
       // Encrypt legacy tokens (kept for backwards compat)

@@ -272,6 +272,157 @@ async function fetchAllStripeCharges(
 // Handler registration
 // =============================================================================
 
+// ---------------------------------------------------------------------------
+// Exported core ingest helpers — used by factory_nightly.ts so the nightly
+// scheduler can call provider-specific ingest logic without going through IPC.
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch LemonSqueezy orders and upsert a launch_outcomes row for the given run.
+ * Optionally filter by product name substring and/or minimum creation timestamp.
+ */
+export async function ingestLemonSqueezyPayments(
+  runId: number,
+  apiKey: string,
+  opts: { productName?: string; fromTimestamp?: number } = {},
+): Promise<{ inserted: number; revenueUsdCents: number; conversions: number }> {
+  let orders = await fetchAllLemonSqueezyOrders(apiKey);
+
+  if (opts.fromTimestamp != null) {
+    const from = opts.fromTimestamp;
+    orders = orders.filter((o) => {
+      const ts = Math.floor(new Date(o.attributes.created_at).getTime() / 1000);
+      return ts >= from;
+    });
+  }
+
+  if (opts.productName) {
+    const needle = opts.productName.toLowerCase();
+    orders = orders.filter((o) => {
+      const name = (
+        o.attributes.first_order_item?.product_name ?? ""
+      ).toLowerCase();
+      return name.includes(needle);
+    });
+  }
+
+  let revenueUsdCents = 0;
+  let conversions = 0;
+
+  for (const o of orders) {
+    const total = o.attributes.total;
+    if (total == null) {
+      logger.warn(
+        `[factory:ingest-payments] LemonSqueezy order ${o.id} has no total; skipping amount.`,
+      );
+    }
+    revenueUsdCents += total ?? 0;
+    conversions += 1;
+  }
+
+  logger.log(
+    `[factory:ingest-payments] LemonSqueezy: ${conversions} orders, $${revenueUsdCents / 100} USD for runId=${runId}`,
+  );
+
+  if (conversions === 0) {
+    logger.log(
+      `[factory:ingest-payments] No matching lemonsqueezy data found for runId=${runId}. No row inserted.`,
+    );
+    return { inserted: 0, revenueUsdCents: 0, conversions: 0 };
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(launchOutcomes)
+      .where(
+        and(
+          eq(launchOutcomes.runId, runId),
+          eq(launchOutcomes.source, "lemonsqueezy"),
+        ),
+      );
+    await tx.insert(launchOutcomes).values({
+      runId,
+      revenueUsd: revenueUsdCents,
+      conversions,
+      source: "lemonsqueezy",
+    });
+  });
+
+  logger.log(
+    `[factory:ingest-payments] Inserted 1 outcome row for runId=${runId} (lemonsqueezy).`,
+  );
+  return { inserted: 1, revenueUsdCents, conversions };
+}
+
+/**
+ * Fetch Stripe charges and upsert a launch_outcomes row for the given run.
+ * Optionally filter by product name substring and/or minimum creation timestamp.
+ */
+export async function ingestStripePayments(
+  runId: number,
+  secretKey: string,
+  opts: { productName?: string; fromTimestamp?: number } = {},
+): Promise<{ inserted: number; revenueUsdCents: number; conversions: number }> {
+  let charges = await fetchAllStripeCharges(secretKey, opts.fromTimestamp);
+
+  // Only count succeeded USD charges
+  charges = charges.filter(
+    (c) => c.status === "succeeded" && c.currency === "usd",
+  );
+
+  if (opts.productName) {
+    const needle = opts.productName.toLowerCase();
+    charges = charges.filter((c) => {
+      const desc = (c.description ?? "").toLowerCase();
+      const metaValues = Object.values(c.metadata ?? {})
+        .join(" ")
+        .toLowerCase();
+      return desc.includes(needle) || metaValues.includes(needle);
+    });
+  }
+
+  let revenueUsdCents = 0;
+  let conversions = 0;
+
+  for (const c of charges) {
+    revenueUsdCents += c.amount;
+    conversions += 1;
+  }
+
+  logger.log(
+    `[factory:ingest-payments] Stripe: ${conversions} charges, $${revenueUsdCents / 100} USD for runId=${runId}`,
+  );
+
+  if (conversions === 0) {
+    logger.log(
+      `[factory:ingest-payments] No matching stripe data found for runId=${runId}. No row inserted.`,
+    );
+    return { inserted: 0, revenueUsdCents: 0, conversions: 0 };
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(launchOutcomes)
+      .where(
+        and(
+          eq(launchOutcomes.runId, runId),
+          eq(launchOutcomes.source, "stripe"),
+        ),
+      );
+    await tx.insert(launchOutcomes).values({
+      runId,
+      revenueUsd: revenueUsdCents,
+      conversions,
+      source: "stripe",
+    });
+  });
+
+  logger.log(
+    `[factory:ingest-payments] Inserted 1 outcome row for runId=${runId} (stripe).`,
+  );
+  return { inserted: 1, revenueUsdCents, conversions };
+}
+
 export function registerFactoryPaymentsHandlers(): void {
   // ---------------------------------------------------------------------------
   // factory:save-lemonsqueezy-key
@@ -329,9 +480,6 @@ export function registerFactoryPaymentsHandlers(): void {
     async (_, { runId, provider, productName, fromTimestamp }) => {
       const settings = readSettings();
 
-      let revenueUsdCents = 0;
-      let conversions = 0;
-
       if (provider === "lemonsqueezy") {
         const apiKey = settings.lemonSqueezyApiKey?.value;
         if (!apiKey) {
@@ -340,44 +488,10 @@ export function registerFactoryPaymentsHandlers(): void {
             DyadErrorKind.Auth,
           );
         }
-
-        let orders = await fetchAllLemonSqueezyOrders(apiKey);
-
-        // Filter by fromTimestamp if provided
-        if (fromTimestamp != null) {
-          orders = orders.filter((o) => {
-            const ts = Math.floor(
-              new Date(o.attributes.created_at).getTime() / 1000,
-            );
-            return ts >= fromTimestamp;
-          });
-        }
-
-        // Filter by productName substring (case-insensitive) if provided
-        if (productName) {
-          const needle = productName.toLowerCase();
-          orders = orders.filter((o) => {
-            const name = (
-              o.attributes.first_order_item?.product_name ?? ""
-            ).toLowerCase();
-            return name.includes(needle);
-          });
-        }
-
-        for (const o of orders) {
-          const total = o.attributes.total;
-          if (total == null) {
-            logger.warn(
-              `[factory:ingest-payments] LemonSqueezy order ${o.id} has no total; skipping amount.`,
-            );
-          }
-          revenueUsdCents += total ?? 0;
-          conversions += 1;
-        }
-
-        logger.log(
-          `[factory:ingest-payments] LemonSqueezy: ${conversions} orders, $${revenueUsdCents / 100} USD for runId=${runId}`,
-        );
+        return ingestLemonSqueezyPayments(runId, apiKey, {
+          productName,
+          fromTimestamp,
+        });
       } else {
         // provider === "stripe"
         const secretKey = settings.stripeSecretKey?.value;
@@ -387,73 +501,11 @@ export function registerFactoryPaymentsHandlers(): void {
             DyadErrorKind.Auth,
           );
         }
-
-        // fetchAllStripeCharges now passes fromTimestamp as created[gte] to the
-        // Stripe API, so no additional client-side timestamp filtering is needed.
-        let charges = await fetchAllStripeCharges(secretKey, fromTimestamp);
-
-        // Only count succeeded USD charges
-        charges = charges.filter(
-          (c) => c.status === "succeeded" && c.currency === "usd",
-        );
-
-        // Filter by description / metadata substring if productName provided
-        if (productName) {
-          const needle = productName.toLowerCase();
-          charges = charges.filter((c) => {
-            const desc = (c.description ?? "").toLowerCase();
-            const metaValues = Object.values(c.metadata ?? {})
-              .join(" ")
-              .toLowerCase();
-            return desc.includes(needle) || metaValues.includes(needle);
-          });
-        }
-
-        for (const c of charges) {
-          revenueUsdCents += c.amount;
-          conversions += 1;
-        }
-
-        logger.log(
-          `[factory:ingest-payments] Stripe: ${conversions} charges, $${revenueUsdCents / 100} USD for runId=${runId}`,
-        );
-      }
-
-      if (conversions === 0) {
-        logger.log(
-          `[factory:ingest-payments] No matching ${provider} data found for runId=${runId}. No row inserted.`,
-        );
-        return { inserted: 0, revenueUsdCents: 0, conversions: 0 };
-      }
-
-      // Upsert atomically: delete the existing row for this run+provider then
-      // insert fresh, wrapped in a transaction to prevent partial writes if the
-      // app crashes between the two statements or concurrent ingests race.
-      // Filtering by both runId and source ensures syncing one provider does not
-      // remove outcome rows from the other provider.
-      await db.transaction(async (tx) => {
-        await tx
-          .delete(launchOutcomes)
-          .where(
-            and(
-              eq(launchOutcomes.runId, runId),
-              eq(launchOutcomes.source, provider),
-            ),
-          );
-
-        await tx.insert(launchOutcomes).values({
-          runId,
-          // revenueUsd column stores USD cents (matches Stripe/LemonSqueezy native unit)
-          revenueUsd: revenueUsdCents,
-          conversions,
-          source: provider,
+        return ingestStripePayments(runId, secretKey, {
+          productName,
+          fromTimestamp,
         });
-      });
-
-      logger.log(
-        `[factory:ingest-payments] Inserted 1 outcome row for runId=${runId} (${provider}).`,
-      );
-      return { inserted: 1, revenueUsdCents, conversions };
+      }
     },
   );
 

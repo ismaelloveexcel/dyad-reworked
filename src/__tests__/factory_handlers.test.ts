@@ -186,6 +186,12 @@ const mockSettingsState = vi.hoisted(() => ({
   // PR #12 — payment provider key state
   lemonSqueezyApiKey: undefined as { value: string } | undefined,
   stripeSecretKey: undefined as { value: string } | undefined,
+  // PR #13 — Plausible analytics key + site
+  plausibleApiKey: undefined as { value: string } | undefined,
+  plausibleSiteId: undefined as string | undefined,
+  // PR #13 — nightly job state
+  factoryNightlyJobEnabled: true as boolean | undefined,
+  factoryNightlyLastRanAt: undefined as number | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
@@ -199,6 +205,10 @@ vi.mock("@/main/settings", () => ({
     netlifyAccessToken: mockSettingsState.netlifyAccessToken,
     lemonSqueezyApiKey: mockSettingsState.lemonSqueezyApiKey,
     stripeSecretKey: mockSettingsState.stripeSecretKey,
+    plausibleApiKey: mockSettingsState.plausibleApiKey,
+    plausibleSiteId: mockSettingsState.plausibleSiteId,
+    factoryNightlyJobEnabled: mockSettingsState.factoryNightlyJobEnabled,
+    factoryNightlyLastRanAt: mockSettingsState.factoryNightlyLastRanAt,
   })),
   // PR #11 — writeSettings mock for factory:save-netlify-token
   writeSettings: vi.fn(),
@@ -217,6 +227,8 @@ import {
   LAUNCH_KIT_PROMPT,
 } from "@/ipc/handlers/factory_handlers";
 import { registerFactoryPaymentsHandlers } from "@/ipc/handlers/factory_payments";
+import { registerFactoryAnalyticsHandlers } from "@/ipc/handlers/factory_analytics";
+import { registerFactoryNightlyHandlers } from "@/ipc/handlers/factory_nightly";
 import { DyadErrorKind } from "@/errors/dyad_error";
 import { sendTelemetryException } from "@/ipc/utils/telemetry";
 
@@ -331,6 +343,11 @@ beforeEach(() => {
   // PR #12 — reset payment key state
   mockSettingsState.lemonSqueezyApiKey = undefined;
   mockSettingsState.stripeSecretKey = undefined;
+  // PR #13 — reset analytics + nightly state
+  mockSettingsState.plausibleApiKey = undefined;
+  mockSettingsState.plausibleSiteId = undefined;
+  mockSettingsState.factoryNightlyJobEnabled = true;
+  mockSettingsState.factoryNightlyLastRanAt = undefined;
   // Reset fetchEmbedding to its default implementation
   mockFetchEmbedding.mockResolvedValue([0.1, 0.2, 0.3]);
   vi.clearAllMocks();
@@ -338,6 +355,8 @@ beforeEach(() => {
   // but we clear call history). Calling registerFactoryHandlers() re-populates the map.
   registerFactoryHandlers();
   registerFactoryPaymentsHandlers();
+  registerFactoryAnalyticsHandlers();
+  registerFactoryNightlyHandlers();
 });
 
 afterEach(() => {
@@ -3024,5 +3043,372 @@ describe("factory:ingest-payments", () => {
     await expect(
       handler(mockEvent, { runId: 1, provider: "stripe" }),
     ).rejects.toMatchObject({ kind: DyadErrorKind.PaymentIngestFailure });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #13 — factory:save-plausible-config
+// ---------------------------------------------------------------------------
+
+describe("factory:save-plausible-config", () => {
+  it("throws Auth when key is empty", async () => {
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await expect(
+      handler(mockEvent, { key: "", siteId: "example.com" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when siteId is empty", async () => {
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await expect(
+      handler(mockEvent, { key: "some-key", siteId: "" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Plausible returns 401", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, status: 401 }),
+    );
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await expect(
+      handler(mockEvent, { key: "bad-key", siteId: "example.com" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws AnalyticsIngestFailure when Plausible returns 500", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve("Internal Server Error"),
+      }),
+    );
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await expect(
+      handler(mockEvent, { key: "some-key", siteId: "example.com" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.AnalyticsIngestFailure });
+  });
+
+  it("throws AnalyticsIngestFailure when network call throws (offline)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("Network error")),
+    );
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await expect(
+      handler(mockEvent, { key: "some-key", siteId: "example.com" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.AnalyticsIngestFailure });
+  });
+
+  it("saves key and siteId when Plausible API returns valid sites list", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ sites: [] }),
+      }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await handler(mockEvent, {
+      key: "  plausible_api_xyz  ",
+      siteId: "  myapp.com  ",
+    });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      plausibleApiKey: { value: "plausible_api_xyz" },
+      plausibleSiteId: "myapp.com",
+    });
+  });
+
+  it("saves key when Plausible API returns a plain array (v2 shape)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([{ domain: "myapp.com" }]),
+      }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await handler(mockEvent, { key: "pl_v2_key", siteId: "myapp.com" });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      plausibleApiKey: { value: "pl_v2_key" },
+      plausibleSiteId: "myapp.com",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #13 — factory:ingest-analytics
+// ---------------------------------------------------------------------------
+
+describe("factory:ingest-analytics", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("throws Auth when Plausible API key is not configured", async () => {
+    mockSettingsState.plausibleApiKey = undefined;
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    await expect(
+      handler(mockEvent, { runId: 1 }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("throws Auth when Plausible site ID is not configured", async () => {
+    mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
+    mockSettingsState.plausibleSiteId = undefined;
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    await expect(
+      handler(mockEvent, { runId: 1 }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Auth });
+  });
+
+  it("returns inserted=0 when Plausible returns 0 pageviews", async () => {
+    mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
+    mockSettingsState.plausibleSiteId = "example.com";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            results: {
+              pageviews: { value: 0 },
+              visitors: { value: 0 },
+            },
+          }),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    const result = await handler(mockEvent, { runId: 1 });
+
+    expect(result).toMatchObject({ inserted: 0, views: 0 });
+  });
+
+  it("inserts 1 outcome row when Plausible returns pageviews > 0", async () => {
+    mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
+    mockSettingsState.plausibleSiteId = "example.com";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            results: {
+              pageviews: { value: 12345 },
+              visitors: { value: 3000 },
+            },
+          }),
+      }),
+    );
+
+    const { db: dbModule } = await import("@/db");
+
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    const result = await handler(mockEvent, { runId: 1 });
+
+    expect(result).toMatchObject({ inserted: 1, views: 12345 });
+    expect(vi.mocked(dbModule.transaction)).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws AnalyticsIngestFailure when Plausible stats API returns error", async () => {
+    mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
+    mockSettingsState.plausibleSiteId = "example.com";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        text: () => Promise.resolve("Site not found"),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    await expect(
+      handler(mockEvent, { runId: 1 }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.AnalyticsIngestFailure });
+  });
+
+  it("uses custom period when provided", async () => {
+    mockSettingsState.plausibleApiKey = { value: "pl_test_key" };
+    mockSettingsState.plausibleSiteId = "example.com";
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          results: { pageviews: { value: 500 }, visitors: { value: 100 } },
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handler = capturedHandlers.get("factory:ingest-analytics")!;
+    await handler(mockEvent, { runId: 1, period: "7d" });
+
+    // Check the fetch was called with period=7d in the URL
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("period=7d"),
+      expect.any(Object),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #13 — factory:get-nightly-status
+// ---------------------------------------------------------------------------
+
+describe("factory:get-nightly-status", () => {
+  it("returns enabled=true and lastRanAt=null when job has never run", () => {
+    mockSettingsState.factoryNightlyJobEnabled = true;
+    mockSettingsState.factoryNightlyLastRanAt = undefined;
+
+    const handler = capturedHandlers.get("factory:get-nightly-status")!;
+    const result = handler(mockEvent, {}) as Promise<{
+      enabled: boolean;
+      lastRanAt: number | null;
+    }>;
+    return result.then((r) => {
+      expect(r.enabled).toBe(true);
+      expect(r.lastRanAt).toBeNull();
+    });
+  });
+
+  it("returns enabled=false when job is disabled in settings", () => {
+    mockSettingsState.factoryNightlyJobEnabled = false;
+    mockSettingsState.factoryNightlyLastRanAt = 1700000000;
+
+    const handler = capturedHandlers.get("factory:get-nightly-status")!;
+    const result = handler(mockEvent, {}) as Promise<{
+      enabled: boolean;
+      lastRanAt: number;
+      nextRunAt: number | null;
+    }>;
+    return result.then((r) => {
+      expect(r.enabled).toBe(false);
+      expect(r.lastRanAt).toBe(1700000000);
+      expect(r.nextRunAt).toBeNull();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #13 — factory:run-nightly-now
+// ---------------------------------------------------------------------------
+
+describe("factory:run-nightly-now", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("returns ranAt and runsChecked=0 when there are no LAUNCHED runs", async () => {
+    mockDbState.rows = [];
+
+    const handler = capturedHandlers.get("factory:run-nightly-now")!;
+    const result = (await handler(mockEvent, {})) as {
+      ranAt: number;
+      runsChecked: number;
+    };
+
+    expect(result.runsChecked).toBe(0);
+    expect(typeof result.ranAt).toBe("number");
+    expect(result.ranAt).toBeGreaterThan(0);
+  });
+
+  it("persists factoryNightlyLastRanAt after running", async () => {
+    mockDbState.rows = [];
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:run-nightly-now")!;
+    await handler(mockEvent, {});
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ factoryNightlyLastRanAt: expect.any(Number) }),
+    );
+  });
+
+  it("calls ingest for each LAUNCHED run that has Stripe key configured", async () => {
+    mockSettingsState.stripeSecretKey = { value: "sk_test_key" };
+    mockDbState.rows = [{ id: 10 }, { id: 11 }];
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          object: "list",
+          data: [],
+          has_more: false,
+          url: "/v1/charges",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const handler = capturedHandlers.get("factory:run-nightly-now")!;
+    const result = (await handler(mockEvent, {})) as { runsChecked: number };
+
+    // 2 LAUNCHED runs → 2 Stripe calls
+    expect(result.runsChecked).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns runsChecked=0 immediately when a cycle is already in progress", async () => {
+    // Simulate an in-progress cycle by firing two concurrent invocations.
+    // The second one must return quickly with runsChecked=0 rather than
+    // starting a parallel ingest.
+    //
+    // Because the guard sets isRunning=true synchronously before the first
+    // await, the second call always sees isRunning=true when it starts.
+    // Use a non-empty row set so the first call returns runsChecked=1 and
+    // the skipped call returns runsChecked=0.
+    mockDbState.rows = [{ id: 10 }];
+
+    const handler = capturedHandlers.get("factory:run-nightly-now")!;
+
+    // Fire both without awaiting either yet; first acquires the lock.
+    const [first, second] = await Promise.all([
+      handler(mockEvent, {}) as Promise<{ runsChecked: number }>,
+      handler(mockEvent, {}) as Promise<{ runsChecked: number }>,
+    ]);
+
+    // Exactly one call should have been the "active" run (runsChecked=1)
+    // and the other should have been skipped (runsChecked=0).
+    const results = [first.runsChecked, second.runsChecked].sort();
+    expect(results).toEqual([0, 1]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #13 — factory:toggle-nightly-job
+// ---------------------------------------------------------------------------
+
+describe("factory:toggle-nightly-job", () => {
+  it("writes factoryNightlyJobEnabled=true to settings", async () => {
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:toggle-nightly-job")!;
+    await handler(mockEvent, { enabled: true });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      factoryNightlyJobEnabled: true,
+    });
+  });
+
+  it("writes factoryNightlyJobEnabled=false to settings", async () => {
+    const { writeSettings } = await import("@/main/settings");
+
+    const handler = capturedHandlers.get("factory:toggle-nightly-job")!;
+    await handler(mockEvent, { enabled: false });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      factoryNightlyJobEnabled: false,
+    });
   });
 });

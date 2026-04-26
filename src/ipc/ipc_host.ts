@@ -44,6 +44,8 @@ import { registerMediaHandlers } from "./handlers/media_handlers";
 import { registerImageGenerationHandlers } from "./handlers/image_generation_handlers";
 import { registerFactoryHandlers } from "./handlers/factory_handlers";
 import { registerFactoryPaymentsHandlers } from "./handlers/factory_payments";
+import { registerFactoryAnalyticsHandlers } from "./handlers/factory_analytics";
+import { registerFactoryNightlyHandlers } from "./handlers/factory_nightly";
 
 export function registerIpcHandlers() {
   // Register all IPC handlers by category
@@ -93,4 +95,6 @@ export function registerIpcHandlers() {
   registerImageGenerationHandlers();
   registerFactoryHandlers();
   registerFactoryPaymentsHandlers();
+  registerFactoryAnalyticsHandlers();
+  registerFactoryNightlyHandlers();
 }

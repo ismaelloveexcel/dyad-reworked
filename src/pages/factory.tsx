@@ -692,6 +692,251 @@ function PaymentsSection({ result }: { result: IdeaEvaluationResult }) {
   );
 }
 
+// =============================================================================
+// PR #13 — Analytics section — shown inside IdeaCard for BUILD ideas that have
+// been persisted.  Provides one-click Plausible pageview ingest and inline
+// config save for the API key + site domain.
+// =============================================================================
+
+function AnalyticsSection({ result }: { result: IdeaEvaluationResult }) {
+  const runId = result.runId;
+
+  const [plausibleKey, setPlausibleKey] = useState("");
+  const [plausibleSiteId, setPlausibleSiteId] = useState("");
+  const [showPlausibleForm, setShowPlausibleForm] = useState(false);
+
+  const savePlausibleMutation = useMutation({
+    mutationFn: ({ key, siteId }: { key: string; siteId: string }) =>
+      factoryClient.savePlausibleConfig({ key, siteId }),
+    onSuccess: () => {
+      setShowPlausibleForm(false);
+      setPlausibleKey("");
+      setPlausibleSiteId("");
+    },
+  });
+
+  const ingestMutation = useMutation({
+    mutationFn: () => factoryClient.ingestAnalytics({ runId: runId! }),
+  });
+
+  if (!runId || runId <= 0) return null;
+
+  const { data, isPending, isError, error } = ingestMutation;
+
+  return (
+    <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
+          Analytics Ingest
+        </p>
+        {data && data.inserted > 0 && (
+          <span className="text-xs text-emerald-400">✓ Synced</span>
+        )}
+      </div>
+
+      {/* Ingest button */}
+      <div>
+        <button
+          onClick={() => ingestMutation.mutate()}
+          disabled={isPending}
+          className="text-xs px-3 py-1.5 rounded-lg bg-cyan-900/40 text-cyan-300 hover:bg-cyan-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-cyan-800 transition-colors flex items-center gap-1.5"
+        >
+          {isPending ? (
+            <>
+              <span className="w-3 h-3 rounded-full border-2 border-cyan-300/30 border-t-cyan-300 animate-spin" />
+              Syncing…
+            </>
+          ) : (
+            <>📊 Sync Plausible</>
+          )}
+        </button>
+      </div>
+
+      {isError && (
+        <p className="text-xs text-red-400 leading-relaxed">
+          {error instanceof Error ? error.message : "Analytics sync failed."}
+        </p>
+      )}
+
+      {data && (
+        <div className="rounded-md bg-zinc-900 border border-zinc-700 px-3 py-2 text-xs text-zinc-300">
+          {data.inserted > 0 ? (
+            <span>
+              Synced{" "}
+              <span className="text-cyan-400 font-semibold">
+                {data.views.toLocaleString()} pageview
+                {data.views !== 1 ? "s" : ""}
+              </span>
+            </span>
+          ) : (
+            <span className="text-zinc-500 italic">
+              No pageviews found (0). Check your site domain and try again.
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Plausible config form */}
+      <div className="pt-1 border-t border-zinc-800 space-y-2">
+        <button
+          onClick={() => setShowPlausibleForm((v) => !v)}
+          className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          {showPlausibleForm
+            ? "▲ Hide Plausible config"
+            : "⚙ Set Plausible API key"}
+        </button>
+        {/* Success message is rendered outside the form so it remains visible
+            after the form is hidden on a successful save. */}
+        {savePlausibleMutation.isSuccess && !showPlausibleForm && (
+          <p className="text-xs text-cyan-400">✓ Plausible config saved.</p>
+        )}
+        {showPlausibleForm && (
+          <div className="space-y-2">
+            <label
+              htmlFor="plausible-key-input"
+              className="block text-xs text-zinc-400"
+            >
+              Plausible API key
+            </label>
+            <p id="plausible-key-help" className="text-xs text-zinc-500">
+              Generate a key at{" "}
+              <span className="font-mono">plausible.io → Account → API keys</span>
+              .
+            </p>
+            <input
+              id="plausible-key-input"
+              type="password"
+              value={plausibleKey}
+              onChange={(e) => setPlausibleKey(e.target.value)}
+              placeholder="plausible_api_key_…"
+              aria-describedby="plausible-key-help"
+              className="w-full text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-700 transition-colors"
+            />
+            <label
+              htmlFor="plausible-site-input"
+              className="block text-xs text-zinc-400"
+            >
+              Site domain
+            </label>
+            <p id="plausible-site-help" className="text-xs text-zinc-500">
+              The domain you added in Plausible (e.g.{" "}
+              <span className="font-mono">example.com</span>).
+            </p>
+            <div className="flex gap-2 items-center">
+              <input
+                id="plausible-site-input"
+                type="text"
+                value={plausibleSiteId}
+                onChange={(e) => setPlausibleSiteId(e.target.value)}
+                placeholder="example.com"
+                aria-describedby="plausible-site-help"
+                className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-cyan-700 transition-colors"
+              />
+              <button
+                onClick={() =>
+                  savePlausibleMutation.mutate({
+                    key: plausibleKey,
+                    siteId: plausibleSiteId,
+                  })
+                }
+                disabled={
+                  savePlausibleMutation.isPending ||
+                  !plausibleKey.trim() ||
+                  !plausibleSiteId.trim()
+                }
+                className="text-xs px-3 py-1.5 rounded-lg bg-cyan-900/40 text-cyan-300 hover:bg-cyan-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-cyan-800 transition-colors shrink-0"
+              >
+                {savePlausibleMutation.isPending ? "Saving…" : "Save"}
+              </button>
+            </div>
+            {savePlausibleMutation.isError && (
+              <p className="text-xs text-red-400">
+                {savePlausibleMutation.error instanceof Error
+                  ? savePlausibleMutation.error.message
+                  : "Failed to save config."}
+              </p>
+            )}
+            {savePlausibleMutation.isSuccess && (
+              <p className="text-xs text-cyan-400">✓ Plausible config saved.</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
+// PR #13 — Nightly job status badge — shows last ingest time and lets the
+// user trigger a manual run.  Rendered inside the main factory page header.
+// =============================================================================
+
+function NightlyStatusBadge() {
+  const query = useQuery({
+    queryKey: queryKeys.factory.nightlyStatus,
+    queryFn: () => factoryClient.getNightlyStatus({}),
+    // Refresh every 5 minutes so "last ran" stays current
+    refetchInterval: 5 * 60 * 1000,
+  });
+
+  const runNowMutation = useMutation({
+    mutationFn: () => factoryClient.runNightlyNow({}),
+    onSuccess: () => query.refetch(),
+  });
+
+  const toggleMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      factoryClient.toggleNightlyJob({ enabled }),
+    onSuccess: () => query.refetch(),
+  });
+
+  if (query.isLoading || !query.data) return null;
+
+  const { lastRanAt, enabled } = query.data;
+  const lastRanLabel = lastRanAt
+    ? new Date(lastRanAt * 1000).toLocaleString(undefined, {
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "never";
+
+  return (
+    <div className="flex items-center gap-2 text-xs text-zinc-500">
+      <span
+        className={`inline-block w-1.5 h-1.5 rounded-full ${enabled ? "bg-emerald-500" : "bg-zinc-600"}`}
+        title={enabled ? "Nightly job enabled" : "Nightly job disabled"}
+      />
+      <span>
+        Nightly ingest:{" "}
+        {runNowMutation.isPending ? (
+          <span className="text-zinc-400">Running…</span>
+        ) : (
+          <span className="text-zinc-400">{lastRanLabel}</span>
+        )}
+      </span>
+      <button
+        onClick={() => runNowMutation.mutate()}
+        disabled={runNowMutation.isPending}
+        className="text-zinc-600 hover:text-zinc-400 transition-colors disabled:cursor-not-allowed"
+        title="Run nightly ingest now"
+      >
+        ↺
+      </button>
+      <button
+        onClick={() => toggleMutation.mutate(!enabled)}
+        disabled={toggleMutation.isPending}
+        className={`transition-colors disabled:cursor-not-allowed ${enabled ? "text-emerald-700 hover:text-emerald-500" : "text-zinc-600 hover:text-zinc-400"}`}
+        title={enabled ? "Disable nightly job" : "Enable nightly job"}
+      >
+        {enabled ? "ON" : "OFF"}
+      </button>
+    </div>
+  );
+}
+
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   const handleCopy = async () => {
@@ -1124,6 +1369,11 @@ function IdeaCard({
       {/* PR #12 — Payment ingest from LemonSqueezy / Stripe (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <PaymentsSection result={result} />
+      )}
+
+      {/* PR #13 — Analytics ingest from Plausible (BUILD ideas that have been persisted) */}
+      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+        <AnalyticsSection result={result} />
       )}
 
       {/* PR #10 — Launch kit (BUILD ideas that have been persisted) */}
@@ -2350,6 +2600,8 @@ export default function FactoryPage() {
           <p className="text-sm text-zinc-400">
             Dual-engine idea factory — generates, filters, and learns what works.
           </p>
+          {/* PR #13 — Nightly ingest job status */}
+          <NightlyStatusBadge />
         </div>
 
         {/* PR #1 — Missing OPENAI_API_KEY banner. Renderer-side, but the

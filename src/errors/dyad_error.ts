@@ -47,6 +47,8 @@ export enum DyadErrorKind {
   DeployFailure = "deploy_failure",
   /** factory:ingest-payments failed to fetch or insert payment data. */
   PaymentIngestFailure = "payment_ingest_failure",
+  /** factory:ingest-analytics failed to fetch or insert analytics data. */
+  AnalyticsIngestFailure = "analytics_ingest_failure",
 }
 
 const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
@@ -72,6 +74,8 @@ const TELEMETRY_FILTERED_KINDS: ReadonlySet<DyadErrorKind> = new Set([
   DyadErrorKind.DeployFailure,
   // Payment ingest failures are user-visible (bad key, quota, network), not bugs
   DyadErrorKind.PaymentIngestFailure,
+  // Analytics ingest failures are user-visible (bad key, site not found, network), not bugs
+  DyadErrorKind.AnalyticsIngestFailure,
 ]);
 
 /**
