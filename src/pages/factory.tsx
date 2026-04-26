@@ -1154,6 +1154,14 @@ function IdeaCard({
                 ✦ {(result.noveltyScore * 100).toFixed(0)}% Novel
               </span>
             )}
+            {result.outcomeWeightedUsed && (
+              <span
+                className="text-xs font-semibold px-2.5 py-1 rounded-full border text-sky-300 bg-sky-950/40 border-sky-800"
+                title="Score calibrated with real revenue and conversion data from similar past ideas (outcome-weighted scoring)."
+              >
+                ◎ Outcome-Calibrated
+              </span>
+            )}
             <span
               className={`text-xs font-bold px-3 py-1 rounded-full border ${decisionColor(result.decision)}`}
             >

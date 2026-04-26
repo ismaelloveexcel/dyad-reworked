@@ -401,6 +401,14 @@ const BaseUserSettingsFields = {
     .max(1)
     .optional()
     .catch(undefined),
+  // PR #14 — Outcome-weighted scoring feature flag.  When true (default: false),
+  // the evaluate-idea handler fetches embeddings for the candidate idea, finds
+  // semantically similar past runs, loads their quantitative outcome data, and
+  // injects a context block into the LLM scoring prompt so scores are calibrated
+  // against real-world results.  Requires OPENAI_API_KEY (for embeddings).
+  // Gate is false by default so existing behaviour is preserved until the user
+  // has enough outcome data to make the signal meaningful.
+  factoryOutcomeWeightedScoring: z.boolean().optional(),
 };
 
 /**

@@ -31,7 +31,7 @@ import {
   deserializeEmbedding,
 } from "@/core/factory/embeddings";
 import { fetchEmbedding } from "./factory_embeddings";
-import { readSettings } from "@/main/settings";
+import { readSettings, writeSettings } from "@/main/settings";
 import {
   PROMPT_VERSION,
   CURRENT_PROMPT_HASH,
@@ -45,6 +45,10 @@ import {
   factorySlugFromName,
 } from "@/core/factory/main";
 import { registerFactoryDeployHandlers } from "./factory_deploy";
+import {
+  buildOutcomeContext,
+  type SimilarRunOutcomeData,
+} from "@/core/factory/outcome_scoring";
 
 const logger = log.scope("factory_handlers");
 
@@ -477,11 +481,140 @@ function isUserVisibleFactoryError(err: unknown): boolean {
   );
 }
 
+// PR #14 / PR #5 — Map a raw launch_outcomes DB row to the typed
+// QuantitativeLaunchOutcome shape. Used by both listOutcomes and the
+// outcome-weighted scoring path so null-handling and capturedAt
+// normalisation stay consistent across the codebase.
+function mapLaunchOutcomeRow(r: {
+  id: number;
+  runId: number;
+  revenueUsd: number | null | undefined;
+  conversions: number | null | undefined;
+  views: number | null | undefined;
+  churn30d: number | null | undefined;
+  source: string | null | undefined;
+  capturedAt: Date | number;
+}): QuantitativeLaunchOutcome {
+  return {
+    id: r.id,
+    runId: r.runId,
+    revenueUsd: r.revenueUsd ?? null,
+    conversions: r.conversions ?? null,
+    views: r.views ?? null,
+    churn30d: r.churn30d ?? null,
+    source: r.source ?? null,
+    capturedAt:
+      r.capturedAt instanceof Date
+        ? Math.floor(r.capturedAt.getTime() / 1000)
+        : (r.capturedAt as number),
+  };
+}
+
 export function registerFactoryHandlers() {
   createTypedHandler(factoryContracts.evaluateIdea, async (_, { idea }) => {
+    // PR #14 — Outcome-weighted scoring: when the feature flag is enabled and
+    // OPENAI_API_KEY is present, fetch similar past runs, load their outcome
+    // data, and inject a context block into the LLM scoring prompt.
+    const settings = readSettings();
+    const outcomeWeightingEnabled =
+      settings.factoryOutcomeWeightedScoring === true;
+    let outcomeContext = "";
+    let outcomeWeightedUsed = false;
+
+    if (outcomeWeightingEnabled) {
+      try {
+        const ideaText = idea.trim();
+        const queryVec = await fetchEmbedding(ideaText);
+
+        // Load all rows with embeddings — same scan pattern as saveRun / getSimilarRuns
+        const storedRows = await db
+          .select({
+            id: factoryRuns.id,
+            ideaJson: factoryRuns.ideaJson,
+            embedding: factoryRuns.embedding,
+          })
+          .from(factoryRuns)
+          .where(isNotNull(factoryRuns.embedding));
+
+        // Top-5 most similar past runs. Skip near-identical matches (sim >= 0.9999)
+        // to avoid circular reasoning if the exact same idea was previously saved.
+        const OUTCOME_SIMILAR_LIMIT = 5;
+        const SELF_MATCH_THRESHOLD = 0.9999;
+        type ScoredRow = { id: number; ideaJson: string; similarity: number };
+        const topK: ScoredRow[] = [];
+        let minSim = -Infinity;
+
+        for (const row of storedRows) {
+          const vec = deserializeEmbedding(row.embedding!);
+          if (vec.length === 0) continue;
+          const sim = cosineSimilarity(queryVec, vec);
+          if (sim >= SELF_MATCH_THRESHOLD) continue; // skip exact / near-identical matches
+          if (topK.length < OUTCOME_SIMILAR_LIMIT || sim > minSim) {
+            topK.push({ id: row.id, ideaJson: row.ideaJson, similarity: sim });
+            topK.sort((a, b) => b.similarity - a.similarity);
+            if (topK.length > OUTCOME_SIMILAR_LIMIT) topK.pop();
+            minSim =
+              topK.length > 0 ? topK[topK.length - 1].similarity : -Infinity;
+          }
+        }
+
+        if (topK.length > 0) {
+          // Load outcomes for each top-K run in parallel
+          const outcomeRows = await Promise.all(
+            topK.map(async (row) => {
+              const outcomes = await db
+                .select()
+                .from(launchOutcomes)
+                .where(eq(launchOutcomes.runId, row.id))
+                .orderBy(desc(launchOutcomes.capturedAt));
+
+              let name = "Unknown";
+              try {
+                const parsed = JSON.parse(row.ideaJson) as { name?: string };
+                if (parsed.name) name = parsed.name;
+              } catch {
+                // ignore parse errors
+              }
+
+              const outcomesTyped = outcomes.map(mapLaunchOutcomeRow);
+
+              return {
+                runId: row.id,
+                similarity: row.similarity,
+                name,
+                outcomes: outcomesTyped,
+              } satisfies SimilarRunOutcomeData;
+            }),
+          );
+
+          outcomeContext = buildOutcomeContext(outcomeRows);
+          if (outcomeContext) {
+            outcomeWeightedUsed = true;
+          }
+        }
+      } catch (outcomeErr) {
+        // Outcome-weighted scoring is non-fatal — fall through to standard prompt
+        // MissingApiKey is an expected state when OPENAI_API_KEY is absent
+        if (
+          !(
+            outcomeErr instanceof DyadError &&
+            outcomeErr.kind === DyadErrorKind.MissingApiKey
+          )
+        ) {
+          logger.warn(
+            "[factory] outcome-weighted scoring fetch failed, falling back to standard prompt:",
+            outcomeErr,
+          );
+        }
+      }
+    }
+
     try {
-      const raw = await callWithRetry(EVALUATE_PROMPT(idea));
-      return enrichResult(validateIdeaResult(raw, idea));
+      const raw = await callWithRetry(EVALUATE_PROMPT(idea, outcomeContext));
+      const result = enrichResult(validateIdeaResult(raw, idea));
+      return outcomeWeightedUsed
+        ? { ...result, outcomeWeightedUsed: true }
+        : result;
     } catch (err) {
       if (isUserVisibleFactoryError(err)) throw err;
       logger.warn("LLM provider unavailable, using fallback scoring:", err);
@@ -980,19 +1113,8 @@ export function registerFactoryHandlers() {
         .orderBy(desc(launchOutcomes.capturedAt));
 
       if (rows.length > 0) {
-        const outcomes: QuantitativeLaunchOutcome[] = rows.map((r) => ({
-          id: r.id,
-          runId: r.runId,
-          revenueUsd: r.revenueUsd ?? null,
-          conversions: r.conversions ?? null,
-          views: r.views ?? null,
-          churn30d: r.churn30d ?? null,
-          source: r.source ?? null,
-          capturedAt:
-            r.capturedAt instanceof Date
-              ? Math.floor(r.capturedAt.getTime() / 1000)
-              : (r.capturedAt as number),
-        }));
+        const outcomes: QuantitativeLaunchOutcome[] =
+          rows.map(mapLaunchOutcomeRow);
         return { outcomes };
       }
 
@@ -1469,6 +1591,21 @@ export function registerFactoryHandlers() {
 
   // PR #11 — One-click deploy handlers (Vercel + Netlify)
   registerFactoryDeployHandlers();
+
+  // ===========================================================================
+  // PR #14 — Outcome-weighted scoring toggle
+  // Persists the factoryOutcomeWeightedScoring feature flag via writeSettings.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.toggleOutcomeWeightedScoring,
+    async (_, { enabled }) => {
+      writeSettings({ factoryOutcomeWeightedScoring: enabled });
+      logger.log(
+        `[factory] outcome-weighted scoring ${enabled ? "enabled" : "disabled"} by user.`,
+      );
+    },
+  );
 }
 
 // =============================================================================

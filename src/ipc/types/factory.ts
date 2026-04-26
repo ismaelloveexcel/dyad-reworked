@@ -134,6 +134,10 @@ export const IdeaEvaluationResultSchema = z.object({
   // PR #9 — novelty score: 1 - max cosine similarity vs all stored embeddings.
   // 1.0 = fully unique, 0.0 = identical to an existing idea in the library.
   noveltyScore: z.number().min(0).max(1).optional(),
+  // PR #14 — A/B harness: true when outcome-weighted scoring was used for this
+  // evaluation run (feature flag factoryOutcomeWeightedScoring was enabled and
+  // at least one similar run with outcome data was found).
+  outcomeWeightedUsed: z.boolean().optional(),
 });
 
 export type IdeaEvaluationResult = z.infer<typeof IdeaEvaluationResultSchema>;
@@ -466,6 +470,12 @@ export const factoryContracts = {
   // PR #13 — Enable or disable the nightly ingest job.
   toggleNightlyJob: defineContract({
     channel: "factory:toggle-nightly-job",
+    input: z.object({ enabled: z.boolean() }),
+    output: z.void(),
+  }),
+  // PR #14 — Toggle outcome-weighted scoring feature flag.
+  toggleOutcomeWeightedScoring: defineContract({
+    channel: "factory:toggle-outcome-weighted-scoring",
     input: z.object({ enabled: z.boolean() }),
     output: z.void(),
   }),
