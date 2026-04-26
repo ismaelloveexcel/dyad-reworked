@@ -317,7 +317,8 @@ const BaseUserSettingsFields = {
   plausibleSiteId: z.string().optional(),
   // PR #13 — Nightly outcome ingest job: enabled flag (default true)
   factoryNightlyJobEnabled: z.boolean().optional(),
-  // PR #13 — Unix seconds when the nightly job last completed successfully
+  // PR #13 — Unix seconds when the nightly job last ran (attempted), regardless
+  // of whether individual provider ingests succeeded or failed.
   factoryNightlyLastRanAt: z.number().int().optional(),
   supabase: SupabaseSchema.optional(),
   neon: NeonSchema.optional(),

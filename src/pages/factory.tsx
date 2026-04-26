@@ -786,6 +786,11 @@ function AnalyticsSection({ result }: { result: IdeaEvaluationResult }) {
             ? "▲ Hide Plausible config"
             : "⚙ Set Plausible API key"}
         </button>
+        {/* Success message is rendered outside the form so it remains visible
+            after the form is hidden on a successful save. */}
+        {savePlausibleMutation.isSuccess && !showPlausibleForm && (
+          <p className="text-xs text-cyan-400">✓ Plausible config saved.</p>
+        )}
         {showPlausibleForm && (
           <div className="space-y-2">
             <label
@@ -853,7 +858,7 @@ function AnalyticsSection({ result }: { result: IdeaEvaluationResult }) {
               </p>
             )}
             {savePlausibleMutation.isSuccess && (
-              <p className="text-xs text-cyan-400">Plausible config saved.</p>
+              <p className="text-xs text-cyan-400">✓ Plausible config saved.</p>
             )}
           </div>
         )}

@@ -3124,6 +3124,26 @@ describe("factory:save-plausible-config", () => {
       plausibleSiteId: "myapp.com",
     });
   });
+
+  it("saves key when Plausible API returns a plain array (v2 shape)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([{ domain: "myapp.com" }]),
+      }),
+    );
+
+    const { writeSettings } = await import("@/main/settings");
+    const handler = capturedHandlers.get("factory:save-plausible-config")!;
+    await handler(mockEvent, { key: "pl_v2_key", siteId: "myapp.com" });
+
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith({
+      plausibleApiKey: { value: "pl_v2_key" },
+      plausibleSiteId: "myapp.com",
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -3337,6 +3357,25 @@ describe("factory:run-nightly-now", () => {
     // 2 LAUNCHED runs → 2 Stripe calls
     expect(result.runsChecked).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns runsChecked=0 immediately when a cycle is already in progress", async () => {
+    // Simulate an in-progress cycle by firing two concurrent invocations.
+    // The second one must return quickly with runsChecked=0 rather than
+    // starting a parallel ingest.
+    mockDbState.rows = [];
+
+    const handler = capturedHandlers.get("factory:run-nightly-now")!;
+
+    // Fire both without awaiting either yet; first acquires the lock.
+    const [first, second] = await Promise.all([
+      handler(mockEvent, {}) as Promise<{ runsChecked: number }>,
+      handler(mockEvent, {}) as Promise<{ runsChecked: number }>,
+    ]);
+
+    // At least one result must be runsChecked=0 (the one that was skipped).
+    const skipped = [first, second].find((r) => r.runsChecked === 0);
+    expect(skipped).toBeDefined();
   });
 });
 

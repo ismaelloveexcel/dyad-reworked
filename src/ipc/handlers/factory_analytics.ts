@@ -58,6 +58,7 @@ interface PlausibleAggregateResponse {
 /**
  * Validate a Plausible API key by calling /api/v1/sites.
  * Returns false on 401/403; throws AnalyticsIngestFailure for any other error.
+ * Accepts both a plain array response and a `{ sites: [...] }` object shape.
  */
 async function validatePlausibleKey(key: string): Promise<boolean> {
   const { signal, clear } = withTimeout(ANALYTICS_TIMEOUT_MS);
@@ -68,8 +69,17 @@ async function validatePlausibleKey(key: string): Promise<boolean> {
     });
     if (response.status === 401 || response.status === 403) return false;
     if (response.ok) {
-      const body = (await response.json()) as PlausibleSitesResponse;
-      return Array.isArray(body.sites);
+      const body = (await response.json()) as
+        | PlausibleSitesResponse
+        | unknown[];
+      // Plausible v1 returns an object with a `sites` array; v2 may return
+      // a plain array directly.  Accept either shape as a valid key.
+      if (Array.isArray(body)) return true;
+      if (typeof body === "object" && body !== null && "sites" in body) {
+        return Array.isArray((body as PlausibleSitesResponse).sites);
+      }
+      // Any other non-error JSON response is also considered valid
+      return true;
     }
     throw new DyadError(
       `Plausible API returned ${response.status} while validating key.`,

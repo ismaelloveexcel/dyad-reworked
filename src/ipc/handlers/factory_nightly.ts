@@ -33,6 +33,9 @@ const NIGHTLY_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24 hours
 let nightlyTimer: ReturnType<typeof setInterval> | null = null;
 // Approximate unix seconds when the next scheduled run will fire.
 let nextRunAt: number | null = null;
+// In-process mutex: prevents overlapping ingest cycles triggered by the
+// scheduler interval and concurrent `factory:run-nightly-now` IPC calls.
+let isRunning = false;
 
 // =============================================================================
 // Core ingest logic
@@ -42,80 +45,96 @@ let nextRunAt: number | null = null;
  * Run a full ingest cycle: query all LAUNCHED runs and call every configured
  * provider for each.  Errors per-run are logged but never propagate so the
  * whole batch is not aborted by a single failure.
+ *
+ * Returns early (no-op) if another cycle is already in progress so concurrent
+ * scheduler ticks and manual `factory:run-nightly-now` IPC calls never race.
  */
 export async function runNightlyIngest(): Promise<{
   ranAt: number;
   runsChecked: number;
 }> {
-  logger.log("Nightly ingest: starting cycle");
-
-  const settings = readSettings();
-  const stripeKey = settings.stripeSecretKey?.value;
-  const lsKey = settings.lemonSqueezyApiKey?.value;
-  const plausibleKey = settings.plausibleApiKey?.value;
-  const plausibleSiteId = settings.plausibleSiteId;
-
-  // Query LAUNCHED runs
-  const launchedRuns = await db
-    .select({ id: factoryRuns.id })
-    .from(factoryRuns)
-    .where(eq(factoryRuns.status, "LAUNCHED"));
-
-  logger.log(
-    `Nightly ingest: found ${launchedRuns.length} LAUNCHED run(s) to check`,
-  );
-
-  for (const run of launchedRuns) {
-    if (stripeKey) {
-      try {
-        const result = await ingestStripePayments(run.id, stripeKey);
-        logger.log(
-          `Nightly: Stripe → runId=${run.id} inserted=${result.inserted} conversions=${result.conversions}`,
-        );
-      } catch (err) {
-        logger.warn(`Nightly: Stripe ingest failed for runId=${run.id}`, err);
-      }
-    }
-
-    if (lsKey) {
-      try {
-        const result = await ingestLemonSqueezyPayments(run.id, lsKey);
-        logger.log(
-          `Nightly: LemonSqueezy → runId=${run.id} inserted=${result.inserted} conversions=${result.conversions}`,
-        );
-      } catch (err) {
-        logger.warn(
-          `Nightly: LemonSqueezy ingest failed for runId=${run.id}`,
-          err,
-        );
-      }
-    }
-
-    if (plausibleKey && plausibleSiteId) {
-      try {
-        const result = await ingestPlausibleAnalytics(
-          run.id,
-          plausibleKey,
-          plausibleSiteId,
-        );
-        logger.log(
-          `Nightly: Plausible → runId=${run.id} inserted=${result.inserted} views=${result.views}`,
-        );
-      } catch (err) {
-        logger.warn(
-          `Nightly: Plausible ingest failed for runId=${run.id}`,
-          err,
-        );
-      }
-    }
+  if (isRunning) {
+    logger.log("Nightly ingest: cycle already in progress, skipping.");
+    const ranAt = Math.floor(Date.now() / 1000);
+    return { ranAt, runsChecked: 0 };
   }
 
-  const ranAt = Math.floor(Date.now() / 1000);
-  writeSettings({ factoryNightlyLastRanAt: ranAt });
-  logger.log(
-    `Nightly ingest: cycle complete. ${launchedRuns.length} run(s) checked.`,
-  );
-  return { ranAt, runsChecked: launchedRuns.length };
+  isRunning = true;
+  logger.log("Nightly ingest: starting cycle");
+
+  try {
+    const settings = readSettings();
+    const stripeKey = settings.stripeSecretKey?.value;
+    const lsKey = settings.lemonSqueezyApiKey?.value;
+    const plausibleKey = settings.plausibleApiKey?.value;
+    const plausibleSiteId = settings.plausibleSiteId;
+
+    // Query LAUNCHED runs
+    const launchedRuns = await db
+      .select({ id: factoryRuns.id })
+      .from(factoryRuns)
+      .where(eq(factoryRuns.status, "LAUNCHED"));
+
+    logger.log(
+      `Nightly ingest: found ${launchedRuns.length} LAUNCHED run(s) to check`,
+    );
+
+    for (const run of launchedRuns) {
+      if (stripeKey) {
+        try {
+          const result = await ingestStripePayments(run.id, stripeKey);
+          logger.log(
+            `Nightly: Stripe → runId=${run.id} inserted=${result.inserted} conversions=${result.conversions}`,
+          );
+        } catch (err) {
+          logger.warn(`Nightly: Stripe ingest failed for runId=${run.id}`, err);
+        }
+      }
+
+      if (lsKey) {
+        try {
+          const result = await ingestLemonSqueezyPayments(run.id, lsKey);
+          logger.log(
+            `Nightly: LemonSqueezy → runId=${run.id} inserted=${result.inserted} conversions=${result.conversions}`,
+          );
+        } catch (err) {
+          logger.warn(
+            `Nightly: LemonSqueezy ingest failed for runId=${run.id}`,
+            err,
+          );
+        }
+      }
+
+      if (plausibleKey && plausibleSiteId) {
+        try {
+          const result = await ingestPlausibleAnalytics(
+            run.id,
+            plausibleKey,
+            plausibleSiteId,
+          );
+          logger.log(
+            `Nightly: Plausible → runId=${run.id} inserted=${result.inserted} views=${result.views}`,
+          );
+        } catch (err) {
+          logger.warn(
+            `Nightly: Plausible ingest failed for runId=${run.id}`,
+            err,
+          );
+        }
+      }
+    }
+
+    // Record the attempt timestamp regardless of per-run provider errors.
+    // Semantics: "last time the nightly job ran" — not "last successful run".
+    const ranAt = Math.floor(Date.now() / 1000);
+    writeSettings({ factoryNightlyLastRanAt: ranAt });
+    logger.log(
+      `Nightly ingest: cycle complete. ${launchedRuns.length} run(s) checked.`,
+    );
+    return { ranAt, runsChecked: launchedRuns.length };
+  } finally {
+    isRunning = false;
+  }
 }
 
 // =============================================================================
