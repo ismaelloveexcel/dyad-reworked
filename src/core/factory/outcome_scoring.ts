@@ -32,7 +32,9 @@ export interface SimilarRunOutcomeData {
 export interface OutcomeAggregate {
   /** number of past runs that had at least one outcome row */
   runsWithOutcomes: number;
-  /** number of past runs with revenueUsd > 0 */
+  /** number of past runs with a non-null revenueUsd value (known revenue data) */
+  runsWithKnownRevenue: number;
+  /** number of past runs with revenueUsd > 0 (actually generated revenue) */
   runsWithRevenue: number;
   /** average USD cents across runs that had non-null revenueUsd */
   avgRevenueUsdCents: number | null;
@@ -59,6 +61,7 @@ export function aggregateOutcomes(
   if (runs.length === 0) return null;
 
   let runsWithOutcomes = 0;
+  let runsWithKnownRevenue = 0;
   let runsWithRevenue = 0;
   let totalRevenueCents = 0;
   let revenueCount = 0;
@@ -76,6 +79,7 @@ export function aggregateOutcomes(
     const latest = run.outcomes[0];
 
     if (latest.revenueUsd !== null) {
+      runsWithKnownRevenue++;
       totalRevenueCents += latest.revenueUsd;
       revenueCount++;
       if (latest.revenueUsd > 0) runsWithRevenue++;
@@ -94,6 +98,7 @@ export function aggregateOutcomes(
 
   return {
     runsWithOutcomes,
+    runsWithKnownRevenue,
     runsWithRevenue,
     avgRevenueUsdCents:
       revenueCount > 0 ? totalRevenueCents / revenueCount : null,
@@ -121,12 +126,20 @@ export function buildOutcomeContext(runs: SimilarRunOutcomeData[]): string {
   if (!agg) return "";
 
   const lines: string[] = [
-    `OUTCOME DATA FROM ${agg.totalSimilarRuns} SIMILAR PAST IDEAS (use to calibrate monetisation / market scores):`,
+    `OUTCOME DATA FROM ${agg.runsWithOutcomes} SIMILAR PAST IDEAS WITH RECORDED OUTCOMES (use to calibrate monetisation / market scores):`,
   ];
 
-  lines.push(
-    `- ${agg.runsWithRevenue} of ${agg.runsWithOutcomes} similar ideas that were launched generated revenue.`,
-  );
+  // Revenue ratio — only report against runs with known (non-null) revenue values
+  // to avoid misrepresenting null as "no revenue".
+  if (agg.runsWithKnownRevenue > 0) {
+    lines.push(
+      `- ${agg.runsWithRevenue} of ${agg.runsWithKnownRevenue} similar ideas with known revenue data generated revenue.`,
+    );
+  } else {
+    lines.push(
+      "- Revenue data is unknown for these similar ideas; avoid treating missing revenue as zero.",
+    );
+  }
 
   if (agg.avgRevenueUsdCents !== null) {
     const usd = (agg.avgRevenueUsdCents / 100).toFixed(2);
@@ -145,14 +158,19 @@ export function buildOutcomeContext(runs: SimilarRunOutcomeData[]): string {
     );
   }
 
-  if (agg.runsWithRevenue === 0 && agg.runsWithOutcomes > 0) {
-    lines.push(
-      "- Caution: similar ideas launched but generated no recorded revenue — weight monetisation score conservatively.",
-    );
-  } else if (agg.runsWithRevenue >= Math.ceil(agg.runsWithOutcomes * 0.6)) {
-    lines.push(
-      "- Strong revenue signal: majority of similar ideas generated revenue — weight monetisation score favourably.",
-    );
+  // Heuristic signals — only when we have enough known revenue data to reason about
+  if (agg.runsWithKnownRevenue > 0) {
+    if (agg.runsWithRevenue === 0) {
+      lines.push(
+        "- Caution: similar ideas launched but generated no recorded revenue — weight monetisation score conservatively.",
+      );
+    } else if (
+      agg.runsWithRevenue >= Math.ceil(agg.runsWithKnownRevenue * 0.6)
+    ) {
+      lines.push(
+        "- Strong revenue signal: majority of similar ideas generated revenue — weight monetisation score favourably.",
+      );
+    }
   }
 
   return lines.join("\n");

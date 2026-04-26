@@ -3495,9 +3495,11 @@ describe("factory:evaluate-idea — PR #14 outcome-weighted scoring", () => {
     process.env.OPENAI_API_KEY = "sk-valid";
     registerFactoryHandlers();
 
-    // Provide a stored run with an embedding so the similarity scan finds it
+    // Provide a stored run with a slightly different embedding so cosine similarity
+    // is high but below the SELF_MATCH_THRESHOLD (0.9999), ensuring it passes the
+    // self-match filter added in the review fix.
     const storedIdea = makeIdea({ name: "Similar Idea" });
-    const storedEmbedding = JSON.stringify([0.1, 0.2, 0.3]); // matches mockFetchEmbedding default
+    const storedEmbedding = JSON.stringify([0.12, 0.21, 0.28]); // similar to [0.1,0.2,0.3] but not identical
     const outcomesForRun = [
       {
         id: 1,

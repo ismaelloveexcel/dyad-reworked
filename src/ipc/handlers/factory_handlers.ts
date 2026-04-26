@@ -481,6 +481,35 @@ function isUserVisibleFactoryError(err: unknown): boolean {
   );
 }
 
+// PR #14 / PR #5 — Map a raw launch_outcomes DB row to the typed
+// QuantitativeLaunchOutcome shape. Used by both listOutcomes and the
+// outcome-weighted scoring path so null-handling and capturedAt
+// normalisation stay consistent across the codebase.
+function mapLaunchOutcomeRow(r: {
+  id: number;
+  runId: number;
+  revenueUsd: number | null | undefined;
+  conversions: number | null | undefined;
+  views: number | null | undefined;
+  churn30d: number | null | undefined;
+  source: string | null | undefined;
+  capturedAt: Date | number;
+}): QuantitativeLaunchOutcome {
+  return {
+    id: r.id,
+    runId: r.runId,
+    revenueUsd: r.revenueUsd ?? null,
+    conversions: r.conversions ?? null,
+    views: r.views ?? null,
+    churn30d: r.churn30d ?? null,
+    source: r.source ?? null,
+    capturedAt:
+      r.capturedAt instanceof Date
+        ? Math.floor(r.capturedAt.getTime() / 1000)
+        : (r.capturedAt as number),
+  };
+}
+
 export function registerFactoryHandlers() {
   createTypedHandler(factoryContracts.evaluateIdea, async (_, { idea }) => {
     // PR #14 — Outcome-weighted scoring: when the feature flag is enabled and
@@ -507,8 +536,10 @@ export function registerFactoryHandlers() {
           .from(factoryRuns)
           .where(isNotNull(factoryRuns.embedding));
 
-        // Top-5 most similar past runs (exclude exact same text by sim < 1.0)
+        // Top-5 most similar past runs. Skip near-identical matches (sim >= 0.9999)
+        // to avoid circular reasoning if the exact same idea was previously saved.
         const OUTCOME_SIMILAR_LIMIT = 5;
+        const SELF_MATCH_THRESHOLD = 0.9999;
         type ScoredRow = { id: number; ideaJson: string; similarity: number };
         const topK: ScoredRow[] = [];
         let minSim = -Infinity;
@@ -517,6 +548,7 @@ export function registerFactoryHandlers() {
           const vec = deserializeEmbedding(row.embedding!);
           if (vec.length === 0) continue;
           const sim = cosineSimilarity(queryVec, vec);
+          if (sim >= SELF_MATCH_THRESHOLD) continue; // skip exact / near-identical matches
           if (topK.length < OUTCOME_SIMILAR_LIMIT || sim > minSim) {
             topK.push({ id: row.id, ideaJson: row.ideaJson, similarity: sim });
             topK.sort((a, b) => b.similarity - a.similarity);
@@ -544,19 +576,7 @@ export function registerFactoryHandlers() {
                 // ignore parse errors
               }
 
-              const outcomesTyped = outcomes.map((o) => ({
-                id: o.id,
-                runId: o.runId,
-                revenueUsd: o.revenueUsd ?? null,
-                conversions: o.conversions ?? null,
-                views: o.views ?? null,
-                churn30d: o.churn30d ?? null,
-                source: o.source ?? null,
-                capturedAt:
-                  o.capturedAt instanceof Date
-                    ? Math.floor(o.capturedAt.getTime() / 1000)
-                    : (o.capturedAt as number),
-              }));
+              const outcomesTyped = outcomes.map(mapLaunchOutcomeRow);
 
               return {
                 runId: row.id,
@@ -1093,19 +1113,8 @@ export function registerFactoryHandlers() {
         .orderBy(desc(launchOutcomes.capturedAt));
 
       if (rows.length > 0) {
-        const outcomes: QuantitativeLaunchOutcome[] = rows.map((r) => ({
-          id: r.id,
-          runId: r.runId,
-          revenueUsd: r.revenueUsd ?? null,
-          conversions: r.conversions ?? null,
-          views: r.views ?? null,
-          churn30d: r.churn30d ?? null,
-          source: r.source ?? null,
-          capturedAt:
-            r.capturedAt instanceof Date
-              ? Math.floor(r.capturedAt.getTime() / 1000)
-              : (r.capturedAt as number),
-        }));
+        const outcomes: QuantitativeLaunchOutcome[] =
+          rows.map(mapLaunchOutcomeRow);
         return { outcomes };
       }
 

@@ -55,7 +55,7 @@ describe("aggregateOutcomes", () => {
     expect(aggregateOutcomes(runs)).toBeNull();
   });
 
-  it("counts runs with outcomes and runs with revenue", () => {
+  it("counts runs with outcomes, runs with known revenue, and runs with revenue", () => {
     const runs = [
       makeRun(1, 0.9, [{ revenueUsd: 500, conversions: 3 }]),
       makeRun(2, 0.85, [{ revenueUsd: 0, conversions: 1 }]),
@@ -65,7 +65,18 @@ describe("aggregateOutcomes", () => {
     expect(agg).not.toBeNull();
     expect(agg!.totalSimilarRuns).toBe(3);
     expect(agg!.runsWithOutcomes).toBe(2);
+    expect(agg!.runsWithKnownRevenue).toBe(2); // both run 1 and run 2 have non-null revenueUsd
     expect(agg!.runsWithRevenue).toBe(1); // only run 1 has revenueUsd > 0
+  });
+
+  it("runsWithKnownRevenue excludes runs where revenueUsd is null", () => {
+    const runs = [
+      makeRun(1, 0.9, [{ revenueUsd: null, conversions: 2 }]),
+      makeRun(2, 0.85, [{ revenueUsd: 400 }]),
+    ];
+    const agg = aggregateOutcomes(runs);
+    expect(agg!.runsWithKnownRevenue).toBe(1); // only run 2 has non-null revenueUsd
+    expect(agg!.runsWithRevenue).toBe(1);
   });
 
   it("computes correct avgRevenueUsdCents", () => {
@@ -156,6 +167,20 @@ describe("buildOutcomeContext", () => {
     const runs = [makeRun(1, 0.9, [{ revenueUsd: 500 }])];
     const ctx = buildOutcomeContext(runs);
     expect(ctx).toContain("OUTCOME DATA FROM");
+    // Header uses runsWithOutcomes (1), not totalSimilarRuns
+    expect(ctx).toContain("1 SIMILAR PAST IDEAS WITH RECORDED OUTCOMES");
+  });
+
+  it("emits 'revenue data is unknown' when all runs have null revenueUsd", () => {
+    const runs = [
+      makeRun(1, 0.9, [{ revenueUsd: null, conversions: 3 }]),
+      makeRun(2, 0.85, [{ revenueUsd: null, views: 500 }]),
+    ];
+    const ctx = buildOutcomeContext(runs);
+    expect(ctx).toContain("unknown");
+    // Should NOT emit caution or strong signal when revenue is all null
+    expect(ctx).not.toContain("Caution");
+    expect(ctx).not.toContain("Strong revenue signal");
   });
 
   it("includes revenue signal when avgRevenueUsdCents is available", () => {
