@@ -182,8 +182,10 @@ type BrandPaletteId = (typeof BRAND_PALETTES)[number]["id"];
 
 function ScaffoldSection({
   result,
+  simpleMode,
 }: {
   result: IdeaEvaluationResult;
+  simpleMode?: boolean;
 }) {
   const runId = result.runId;
 
@@ -214,10 +216,12 @@ function ScaffoldSection({
     <div className="rounded-lg border border-zinc-700 bg-zinc-800/30 p-4 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-xs font-medium text-zinc-500 uppercase tracking-wider">
-          Scaffold App
+          {simpleMode ? "Generate App" : "Scaffold App"}
         </p>
         {data && (
-          <span className="text-xs text-emerald-400">✓ Built</span>
+          <span className="text-xs text-emerald-400">
+            {simpleMode ? "✓ App built successfully" : "✓ Built"}
+          </span>
         )}
       </div>
 
@@ -260,10 +264,10 @@ function ScaffoldSection({
           {isPending ? (
             <span className="flex items-center gap-1.5">
               <span className="w-3 h-3 rounded-full border-2 border-indigo-300/30 border-t-indigo-300 animate-spin" />
-              Scaffolding…
+              {simpleMode ? "Generating…" : "Scaffolding…"}
             </span>
           ) : (
-            "▶ Scaffold Runnable App"
+            simpleMode ? "▶ Generate App" : "▶ Scaffold Runnable App"
           )}
         </button>
       )}
@@ -305,7 +309,7 @@ function ScaffoldSection({
 // clear error asking the user to scaffold first.
 // =============================================================================
 
-function DeploySection({ result }: { result: IdeaEvaluationResult }) {
+function DeploySection({ result, simpleMode }: { result: IdeaEvaluationResult; simpleMode?: boolean }) {
   const runId = result.runId;
   const [netlifyToken, setNetlifyToken] = useState("");
   const [showNetlifyForm, setShowNetlifyForm] = useState(false);
@@ -355,20 +359,23 @@ function DeploySection({ result }: { result: IdeaEvaluationResult }) {
               <>▲ Deploy to Vercel</>
             )}
           </button>
-          <button
-            onClick={() => deployMutation.mutate("netlify")}
-            disabled={isPending}
-            className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors flex items-center gap-1.5"
-          >
-            {isPending && deployMutation.variables === "netlify" ? (
-              <>
-                <span className="w-3 h-3 rounded-full border-2 border-teal-300/30 border-t-teal-300 animate-spin" />
-                Deploying…
-              </>
-            ) : (
-              <>⬡ Deploy to Netlify</>
-            )}
-          </button>
+          {/* Netlify button hidden in Simple Mode — code retained for advanced mode */}
+          {!simpleMode && (
+            <button
+              onClick={() => deployMutation.mutate("netlify")}
+              disabled={isPending}
+              className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors flex items-center gap-1.5"
+            >
+              {isPending && deployMutation.variables === "netlify" ? (
+                <>
+                  <span className="w-3 h-3 rounded-full border-2 border-teal-300/30 border-t-teal-300 animate-spin" />
+                  Deploying…
+                </>
+              ) : (
+                <>⬡ Deploy to Netlify</>
+              )}
+            </button>
+          )}
         </div>
       )}
 
@@ -394,64 +401,66 @@ function DeploySection({ result }: { result: IdeaEvaluationResult }) {
         </div>
       )}
 
-      {/* Netlify personal-access token — inline save form */}
-      <div className="pt-1 border-t border-zinc-800 space-y-2">
-        <button
-          onClick={() => setShowNetlifyForm((v) => !v)}
-          className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
-        >
-          {showNetlifyForm ? "▲ Hide Netlify token" : "⚙ Set Netlify token"}
-        </button>
-        {showNetlifyForm && (
-          <div className="space-y-2">
-            <label
-              htmlFor="netlify-token-input"
-              className="block text-xs text-zinc-400"
-            >
-              Netlify personal access token
-            </label>
-            <p
-              id="netlify-token-help"
-              className="text-xs text-zinc-500"
-            >
-              Generate a PAT at{" "}
-              <span className="font-mono">app.netlify.com → User settings → OAuth</span>
-              {"; "}
-              it should start with <span className="font-mono">netlify_pat_…</span>
-            </p>
-            <div className="flex gap-2 items-center">
-              <input
-                id="netlify-token-input"
-                type="password"
-                value={netlifyToken}
-                onChange={(e) => setNetlifyToken(e.target.value)}
-                placeholder="netlify_pat_…"
-                aria-describedby="netlify-token-help"
-                className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-teal-700 transition-colors"
-              />
-              <button
-                onClick={() => saveNetlifyTokenMutation.mutate(netlifyToken)}
-                disabled={
-                  saveNetlifyTokenMutation.isPending || !netlifyToken.trim()
-                }
-                className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors shrink-0"
+      {/* Netlify personal-access token — inline save form — hidden in Simple Mode */}
+      {!simpleMode && (
+        <div className="pt-1 border-t border-zinc-800 space-y-2">
+          <button
+            onClick={() => setShowNetlifyForm((v) => !v)}
+            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            {showNetlifyForm ? "▲ Hide Netlify token" : "⚙ Set Netlify token"}
+          </button>
+          {showNetlifyForm && (
+            <div className="space-y-2">
+              <label
+                htmlFor="netlify-token-input"
+                className="block text-xs text-zinc-400"
               >
-                {saveNetlifyTokenMutation.isPending ? "Saving…" : "Save"}
-              </button>
+                Netlify personal access token
+              </label>
+              <p
+                id="netlify-token-help"
+                className="text-xs text-zinc-500"
+              >
+                Generate a PAT at{" "}
+                <span className="font-mono">app.netlify.com → User settings → OAuth</span>
+                {"; "}
+                it should start with <span className="font-mono">netlify_pat_…</span>
+              </p>
+              <div className="flex gap-2 items-center">
+                <input
+                  id="netlify-token-input"
+                  type="password"
+                  value={netlifyToken}
+                  onChange={(e) => setNetlifyToken(e.target.value)}
+                  placeholder="netlify_pat_…"
+                  aria-describedby="netlify-token-help"
+                  className="flex-1 text-xs px-2.5 py-1.5 bg-zinc-900 border border-zinc-700 rounded-lg text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-teal-700 transition-colors"
+                />
+                <button
+                  onClick={() => saveNetlifyTokenMutation.mutate(netlifyToken)}
+                  disabled={
+                    saveNetlifyTokenMutation.isPending || !netlifyToken.trim()
+                  }
+                  className="text-xs px-3 py-1.5 rounded-lg bg-teal-900/40 text-teal-300 hover:bg-teal-800/50 disabled:bg-zinc-800 disabled:text-zinc-500 border border-teal-800 transition-colors shrink-0"
+                >
+                  {saveNetlifyTokenMutation.isPending ? "Saving…" : "Save"}
+                </button>
+              </div>
             </div>
-          </div>
-        )}
-        {saveNetlifyTokenMutation.isError && (
-          <p className="text-xs text-red-400">
-            {saveNetlifyTokenMutation.error instanceof Error
-              ? saveNetlifyTokenMutation.error.message
-              : "Failed to save token."}
-          </p>
-        )}
-        {saveNetlifyTokenMutation.isSuccess && (
-          <p className="text-xs text-teal-400">Netlify token saved.</p>
-        )}
-      </div>
+          )}
+          {saveNetlifyTokenMutation.isError && (
+            <p className="text-xs text-red-400">
+              {saveNetlifyTokenMutation.error instanceof Error
+                ? saveNetlifyTokenMutation.error.message
+                : "Failed to save token."}
+            </p>
+          )}
+          {saveNetlifyTokenMutation.isSuccess && (
+            <p className="text-xs text-teal-400">Netlify token saved.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1082,6 +1091,102 @@ function LaunchKitSection({ result }: { result: IdeaEvaluationResult }) {
 }
 
 // =============================================================================
+// PR #15 — Simple Factory Mode: Setup checklist component.
+// Shows only the 3 required items (AI key, Vercel token, Checkout URL) so the
+// solo operator knows exactly what to configure before generating and deploying.
+// =============================================================================
+
+type SystemStatusForSetup = {
+  providerKeyPresent: boolean;
+  vercelTokenPresent: boolean;
+  simpleFactoryMode: boolean;
+};
+
+function SimpleSetupChecklist({
+  systemStatus,
+  onToggleAdvanced,
+}: {
+  systemStatus: SystemStatusForSetup;
+  onToggleAdvanced: () => void;
+}) {
+  const items: {
+    label: string;
+    status: "ok" | "missing";
+    okLabel: string;
+    missingLabel: string;
+    note?: string;
+  }[] = [
+    {
+      label: "AI provider key",
+      status: systemStatus.providerKeyPresent ? "ok" : "missing",
+      okLabel: "Ready to generate",
+      missingLabel: "AI key missing — set in .env",
+    },
+    {
+      label: "Vercel token",
+      status: systemStatus.vercelTokenPresent ? "ok" : "missing",
+      okLabel: "Vercel connected",
+      missingLabel: "Vercel token missing — set in Settings",
+    },
+    {
+      label: "Checkout URL",
+      status: "missing",
+      okLabel: "Checkout link configured",
+      missingLabel: "Checkout link missing — set VITE_CHECKOUT_URL in .env before deploying",
+      note: "Set VITE_CHECKOUT_URL in the scaffolded app's .env file. Deploy is blocked until this is present.",
+    },
+  ];
+
+  return (
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+          Setup checklist
+        </p>
+        <button
+          onClick={onToggleAdvanced}
+          className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+        >
+          Show advanced options
+        </button>
+      </div>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item.label} className="flex items-start gap-3">
+            <span
+              className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${
+                item.status === "ok"
+                  ? "bg-emerald-900/60 text-emerald-400 border border-emerald-800"
+                  : "bg-zinc-800 text-zinc-500 border border-zinc-700"
+              }`}
+            >
+              {item.status === "ok" ? "✓" : "○"}
+            </span>
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-zinc-300">{item.label}</p>
+              <p
+                className={`text-xs ${item.status === "ok" ? "text-emerald-400" : "text-zinc-500"}`}
+              >
+                {item.status === "ok" ? item.okLabel : item.missingLabel}
+              </p>
+              {item.note && item.status === "missing" && (
+                <p className="text-xs text-zinc-600 mt-0.5 italic">{item.note}</p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="pt-2 border-t border-zinc-800">
+        <p className="text-xs text-zinc-600">
+          Optional later:{" "}
+          <span className="text-zinc-500">Stripe · LemonSqueezy · Plausible · Netlify · revenue attribution</span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // Idea card
 // =============================================================================
 
@@ -1096,11 +1201,13 @@ function IdeaCard({
   onClose,
   portfolioLink,
   onRunStatusChange,
+  simpleMode,
 }: {
   result: IdeaEvaluationResult;
   onClose?: () => void;
   portfolioLink?: string;
   onRunStatusChange?: (runId: number, status: RunStatus) => void;
+  simpleMode?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -1359,28 +1466,28 @@ function IdeaCard({
           </div>
         )}
 
-      {/* PR #5 — Quantitative outcomes (read-only) */}
-      {result.runId != null && result.runId > 0 && (
+      {/* PR #5 — Quantitative outcomes (read-only) — hidden in Simple Mode */}
+      {!simpleMode && result.runId != null && result.runId > 0 && (
         <OutcomesSection runId={result.runId} />
       )}
 
       {/* PR #6 — Scaffold runnable app (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
-        <ScaffoldSection result={result} />
+        <ScaffoldSection result={result} simpleMode={simpleMode} />
       )}
 
       {/* PR #11 — One-click deploy to Vercel / Netlify (BUILD ideas that have been persisted) */}
       {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
-        <DeploySection result={result} />
+        <DeploySection result={result} simpleMode={simpleMode} />
       )}
 
-      {/* PR #12 — Payment ingest from LemonSqueezy / Stripe (BUILD ideas that have been persisted) */}
-      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+      {/* PR #12 — Payment ingest — hidden in Simple Mode */}
+      {!simpleMode && result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <PaymentsSection result={result} />
       )}
 
-      {/* PR #13 — Analytics ingest from Plausible (BUILD ideas that have been persisted) */}
-      {result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
+      {/* PR #13 — Analytics ingest — hidden in Simple Mode */}
+      {!simpleMode && result.decision === "BUILD" && result.runId != null && result.runId > 0 && (
         <AnalyticsSection result={result} />
       )}
 
@@ -1398,8 +1505,10 @@ function IdeaCard({
 
 function ManualTab({
   onResult,
+  simpleMode,
 }: {
   onResult: (r: IdeaEvaluationResult) => void;
+  simpleMode?: boolean;
 }) {
   const [idea, setIdea] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1459,7 +1568,7 @@ function ManualTab({
       )}
 
       {result && (
-        <IdeaCard result={result} onClose={() => setResult(null)} />
+        <IdeaCard result={result} onClose={() => setResult(null)} simpleMode={simpleMode} />
       )}
     </div>
   );
@@ -1472,9 +1581,11 @@ function ManualTab({
 function GeneratePortfolioTab({
   onResults,
   patterns,
+  simpleMode,
 }: {
   onResults: (ideas: IdeaEvaluationResult[]) => void;
   patterns: PatternEntry[];
+  simpleMode?: boolean;
 }) {
   const [niche, setNiche] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1646,6 +1757,7 @@ function GeneratePortfolioTab({
                     <IdeaCard
                       result={idea}
                       portfolioLink={key !== "experimental" ? portfolio.portfolioLink : undefined}
+                      simpleMode={simpleMode}
                     />
                   </div>
                 )}
@@ -1843,10 +1955,12 @@ function HistoryTab({
   history,
   onClear,
   onRunStatusChange,
+  simpleMode,
 }: {
   history: IdeaEvaluationResult[];
   onClear: () => void;
   onRunStatusChange?: (runId: number, status: RunStatus) => void;
+  simpleMode?: boolean;
 }) {
   const [selected, setSelected] = useState<IdeaEvaluationResult | null>(null);
   // E9 — prompt version filter
@@ -1950,6 +2064,7 @@ function HistoryTab({
           result={selected}
           onClose={() => setSelected(null)}
           onRunStatusChange={onRunStatusChange}
+          simpleMode={simpleMode}
         />
       )}
     </div>
@@ -2550,6 +2665,18 @@ export default function FactoryPage() {
     exportRuns,
   } = useFactoryRun();
 
+  // PR #15 — Simple Factory Mode: true by default, read from systemStatus once loaded.
+  const simpleMode = systemStatus?.simpleFactoryMode ?? true;
+
+  const toggleSimpleModeMutation = useMutation({
+    mutationFn: (enabled: boolean) =>
+      factoryClient.toggleSimpleMode({ enabled }),
+  });
+
+  const handleToggleSimpleMode = (enabled: boolean) => {
+    toggleSimpleModeMutation.mutate(enabled);
+  };
+
   // Derived pattern data for Pattern Engine
   const patterns = useMemo(
     () => extractPatterns(history, pipeline, traction),
@@ -2591,46 +2718,87 @@ export default function FactoryPage() {
     [history],
   );
 
-  const tabs: { id: FactoryTab; label: string }[] = [
-    { id: "dashboard", label: "Dashboard" },
-    { id: "portfolio", label: "Generate Portfolio" },
-    { id: "explore", label: "Explore Ideas" },
-    { id: "manual", label: "Manual Evaluation" },
-    { id: "history", label: "History" },
-  ];
+  // In Simple Mode show only the essential tabs; all tabs remain available in advanced mode.
+  const tabs: { id: FactoryTab; label: string }[] = simpleMode
+    ? [
+        { id: "portfolio", label: "Generate App" },
+        { id: "manual", label: "Evaluate Idea" },
+        { id: "history", label: "History" },
+      ]
+    : [
+        { id: "dashboard", label: "Dashboard" },
+        { id: "portfolio", label: "Generate Portfolio" },
+        { id: "explore", label: "Explore Ideas" },
+        { id: "manual", label: "Manual Evaluation" },
+        { id: "history", label: "History" },
+      ];
+
+  // If the current tab is not available in Simple Mode, redirect to portfolio.
+  const visibleTabIds = tabs.map((t) => t.id);
+  const effectiveTab = visibleTabIds.includes(activeTab) ? activeTab : "portfolio";
 
   return (
     <div className="min-h-screen bg-zinc-950 text-white">
       <div className="max-w-4xl mx-auto px-6 py-10 space-y-8">
         {/* Header */}
         <div className="space-y-1">
-          <h1 className="text-2xl font-bold text-white">App Factory V3</h1>
-          <p className="text-sm text-zinc-400">
-            Dual-engine idea factory — generates, filters, and learns what works.
-          </p>
-          {/* PR #13 — Nightly ingest job status */}
-          <NightlyStatusBadge />
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h1 className="text-2xl font-bold text-white">App Factory V3</h1>
+              <p className="text-sm text-zinc-400">
+                {simpleMode
+                  ? "Idea → Generate app → Add checkout URL → Deploy to Vercel"
+                  : "Dual-engine idea factory — generates, filters, and learns what works."}
+              </p>
+            </div>
+            {/* PR #15 — Simple Mode toggle */}
+            <button
+              onClick={() => handleToggleSimpleMode(!simpleMode)}
+              className="shrink-0 text-xs px-3 py-1.5 rounded-lg bg-zinc-800 text-zinc-400 hover:bg-zinc-700 border border-zinc-700 transition-colors"
+              title={simpleMode ? "Switch to advanced mode" : "Switch to simple mode"}
+            >
+              {simpleMode ? "Advanced mode" : "Simple mode"}
+            </button>
+          </div>
+          {/* PR #13 — Nightly ingest job status — hidden in Simple Mode */}
+          {!simpleMode && <NightlyStatusBadge />}
         </div>
 
-        {/* PR #1 — Missing OPENAI_API_KEY banner. Renderer-side, but the
-            authoritative source is the main process which reads dotenv at
-            startup; see registerFactoryHandlers' getSystemStatus handler. */}
-        {systemStatus && !systemStatus.openaiKeyPresent && (
+        {/* PR #15 — Simple Mode setup checklist */}
+        {simpleMode && systemStatus && (
+          <SimpleSetupChecklist
+            systemStatus={systemStatus}
+            onToggleAdvanced={() => handleToggleSimpleMode(false)}
+          />
+        )}
+
+        {/* Missing provider key banner */}
+        {systemStatus && !systemStatus.providerKeyPresent && (
           <div
             role="alert"
             data-testid="factory-missing-key-banner"
             className="rounded-xl border border-red-800 bg-red-950/30 p-4 space-y-1"
           >
             <p className="text-xs text-red-400 font-medium uppercase tracking-wider">
-              OpenAI API key missing
+              {simpleMode ? "AI key missing" : "AI provider key missing"}
             </p>
             <p className="text-sm text-red-200">
-              Set <code className="px-1 py-0.5 rounded bg-red-900/40">OPENAI_API_KEY</code>{" "}
-              in your <code className="px-1 py-0.5 rounded bg-red-900/40">.env</code> file
-              (or shell environment) and restart the app. Until then, Factory
-              evaluation, idea generation, and portfolio generation will fail
-              with a clear error rather than silently substituting placeholder
-              data.
+              {simpleMode ? (
+                <>
+                  Set your AI provider key in the{" "}
+                  <code className="px-1 py-0.5 rounded bg-red-900/40">.env</code>{" "}
+                  file and restart the app to start generating.
+                </>
+              ) : (
+                <>
+                  Set <code className="px-1 py-0.5 rounded bg-red-900/40">OPENAI_API_KEY</code>{" "}
+                  in your <code className="px-1 py-0.5 rounded bg-red-900/40">.env</code> file
+                  (or shell environment) and restart the app. Until then, Factory
+                  evaluation, idea generation, and portfolio generation will fail
+                  with a clear error rather than silently substituting placeholder
+                  data.
+                </>
+              )}
             </p>
           </div>
         )}
@@ -2664,7 +2832,7 @@ export default function FactoryPage() {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={`px-5 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === tab.id
+                effectiveTab === tab.id
                   ? "bg-zinc-700 text-white"
                   : "text-zinc-500 hover:text-zinc-300"
               }`}
@@ -2675,7 +2843,7 @@ export default function FactoryPage() {
         </div>
 
         {/* Tab content */}
-        {activeTab === "dashboard" && (
+        {effectiveTab === "dashboard" && (
           <DashboardTab
             history={history}
             pipeline={pipeline}
@@ -2687,29 +2855,34 @@ export default function FactoryPage() {
             currentPromptVersion={currentPromptVersion}
           />
         )}
-        {activeTab === "portfolio" && (
+        {effectiveTab === "portfolio" && (
           <GeneratePortfolioTab
             patterns={patterns}
+            simpleMode={simpleMode}
             onResults={(rs) => {
               addToHistory(rs);
             }}
           />
         )}
-        {activeTab === "explore" && (
+        {effectiveTab === "explore" && (
           <AutoTab
             onResults={(rs) => {
               addToHistory(rs);
             }}
           />
         )}
-        {activeTab === "manual" && (
-          <ManualTab onResult={(r) => addToHistory(r)} />
+        {effectiveTab === "manual" && (
+          <ManualTab
+            simpleMode={simpleMode}
+            onResult={(r) => addToHistory(r)}
+          />
         )}
-        {activeTab === "history" && (
+        {effectiveTab === "history" && (
           <HistoryTab
             history={history}
             onClear={clearHistory}
             onRunStatusChange={handleRunStatusChange}
+            simpleMode={simpleMode}
           />
         )}
       </div>

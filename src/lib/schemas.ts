@@ -409,6 +409,13 @@ const BaseUserSettingsFields = {
   // Gate is false by default so existing behaviour is preserved until the user
   // has enough outcome data to make the signal meaningful.
   factoryOutcomeWeightedScoring: z.boolean().optional(),
+  // PR #15 — Simple Factory Mode: when true (default), the Factory UI shows only
+  // the core solo-operator workflow (idea → generate → checkout URL → deploy to
+  // Vercel) and hides advanced panels (Stripe, LemonSqueezy, Plausible, Netlify,
+  // nightly jobs, outcome ingest, revenue-attribution sections).  Set to false to
+  // restore the full advanced UI.  Safety gates (smoke-test, checkout-URL guard,
+  // no-placeholder validation) remain active regardless of this flag.
+  simpleFactoryMode: z.boolean().optional(),
 };
 
 /**

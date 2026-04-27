@@ -284,6 +284,7 @@ export const factoryContracts = {
   }),
   // PR #1 — Surface missing OpenAI key to renderer for the global banner
   // PR #8 — Extended with provider + providerKeyPresent for multi-provider routing
+  // PR #15 — Extended with simpleFactoryMode flag and vercelTokenPresent
   getSystemStatus: defineContract({
     channel: "factory:get-system-status",
     input: z.object({}),
@@ -293,6 +294,10 @@ export const factoryContracts = {
       // PR #8 additions
       provider: z.enum(["openai", "anthropic", "google"]),
       providerKeyPresent: z.boolean(),
+      // PR #15 — Simple Factory Mode flag (default true)
+      simpleFactoryMode: z.boolean(),
+      // PR #15 — Vercel token present (for setup checklist in Simple Mode)
+      vercelTokenPresent: z.boolean(),
     }),
   }),
   // PR #5 — Read quantitative outcomes for a run (no ingest yet)
@@ -476,6 +481,15 @@ export const factoryContracts = {
   // PR #14 — Toggle outcome-weighted scoring feature flag.
   toggleOutcomeWeightedScoring: defineContract({
     channel: "factory:toggle-outcome-weighted-scoring",
+    input: z.object({ enabled: z.boolean() }),
+    output: z.void(),
+  }),
+  // PR #15 — Toggle Simple Factory Mode (default: true).
+  // When true, the Factory UI shows only the core solo-operator workflow and
+  // hides advanced panels (Stripe, LemonSqueezy, Plausible, Netlify, nightly
+  // jobs, outcome ingest).  Safety gates remain active regardless.
+  toggleSimpleMode: defineContract({
+    channel: "factory:toggle-simple-mode",
     input: z.object({ enabled: z.boolean() }),
     output: z.void(),
   }),

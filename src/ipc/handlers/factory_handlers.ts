@@ -1089,12 +1089,19 @@ export function registerFactoryHandlers() {
 
     // Retain openaiKeyPresent for backwards compat with existing renderer code.
     const openaiKey = process.env.OPENAI_API_KEY ?? "";
+    const vercelToken = readSettings().vercelAccessToken;
     return {
       openaiKeyPresent:
         typeof openaiKey === "string" && openaiKey.trim().length > 0,
       modelVersion: getFactoryModelVersion(provider),
       provider,
       providerKeyPresent,
+      // PR #15 — Simple Factory Mode: default true when unset
+      simpleFactoryMode: readSettings().simpleFactoryMode ?? true,
+      // PR #15 — Vercel token present (for setup checklist in Simple Mode)
+      vercelTokenPresent:
+        typeof vercelToken?.value === "string" &&
+        vercelToken.value.trim().length > 0,
     };
   });
 
@@ -1603,6 +1610,21 @@ export function registerFactoryHandlers() {
       writeSettings({ factoryOutcomeWeightedScoring: enabled });
       logger.log(
         `[factory] outcome-weighted scoring ${enabled ? "enabled" : "disabled"} by user.`,
+      );
+    },
+  );
+
+  // ===========================================================================
+  // PR #15 — Simple Factory Mode toggle
+  // Persists the simpleFactoryMode flag via writeSettings.
+  // ===========================================================================
+
+  createTypedHandler(
+    factoryContracts.toggleSimpleMode,
+    async (_, { enabled }) => {
+      writeSettings({ simpleFactoryMode: enabled });
+      logger.log(
+        `[factory] simple factory mode ${enabled ? "enabled" : "disabled"} by user.`,
       );
     },
   );

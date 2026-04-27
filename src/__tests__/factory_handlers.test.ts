@@ -196,6 +196,8 @@ const mockSettingsState = vi.hoisted(() => ({
   factoryNightlyLastRanAt: undefined as number | undefined,
   // PR #14 — outcome-weighted scoring feature flag
   factoryOutcomeWeightedScoring: false as boolean | undefined,
+  // PR #15 — Simple Factory Mode flag (default true)
+  simpleFactoryMode: true as boolean | undefined,
 }));
 
 vi.mock("@/main/settings", () => ({
@@ -215,6 +217,7 @@ vi.mock("@/main/settings", () => ({
     factoryNightlyLastRanAt: mockSettingsState.factoryNightlyLastRanAt,
     factoryOutcomeWeightedScoring:
       mockSettingsState.factoryOutcomeWeightedScoring,
+    simpleFactoryMode: mockSettingsState.simpleFactoryMode,
   })),
   // PR #11 — writeSettings mock for factory:save-netlify-token
   writeSettings: vi.fn(),
@@ -3646,5 +3649,124 @@ describe("factory:evaluate-idea — PR #14 outcome-weighted scoring", () => {
     expect(typeof result.fallbackUsed).toBe("boolean");
     // outcomeWeightedUsed should NOT be set because context could not be built
     expect(result.outcomeWeightedUsed).toBeFalsy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #15 — Simple Factory Mode
+// ---------------------------------------------------------------------------
+
+describe("factory:get-system-status — simple factory mode", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("returns simpleFactoryMode=true when setting is true (default)", async () => {
+    mockSettingsState.simpleFactoryMode = true;
+    registerFactoryHandlers();
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      simpleFactoryMode: boolean;
+      vercelTokenPresent: boolean;
+    };
+    expect(result.simpleFactoryMode).toBe(true);
+  });
+
+  it("returns simpleFactoryMode=true when setting is undefined (defaults to true)", async () => {
+    mockSettingsState.simpleFactoryMode = undefined;
+    registerFactoryHandlers();
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      simpleFactoryMode: boolean;
+    };
+    // undefined ?? true → true
+    expect(result.simpleFactoryMode).toBe(true);
+  });
+
+  it("returns simpleFactoryMode=false when setting is explicitly false", async () => {
+    mockSettingsState.simpleFactoryMode = false;
+    registerFactoryHandlers();
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      simpleFactoryMode: boolean;
+    };
+    expect(result.simpleFactoryMode).toBe(false);
+  });
+
+  it("returns vercelTokenPresent=false when vercel token is absent", async () => {
+    mockSettingsState.simpleFactoryMode = true;
+    mockSettingsState.vercelAccessToken = undefined;
+    registerFactoryHandlers();
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      vercelTokenPresent: boolean;
+    };
+    expect(result.vercelTokenPresent).toBe(false);
+  });
+
+  it("returns vercelTokenPresent=true when vercel token is set", async () => {
+    mockSettingsState.simpleFactoryMode = true;
+    mockSettingsState.vercelAccessToken = { value: "vercel_tok_abc123" };
+    registerFactoryHandlers();
+    process.env.OPENAI_API_KEY = "sk-valid";
+    const handler = capturedHandlers.get("factory:get-system-status")!;
+    const result = (await handler(mockEvent, {})) as {
+      vercelTokenPresent: boolean;
+    };
+    expect(result.vercelTokenPresent).toBe(true);
+  });
+});
+
+describe("factory:toggle-simple-mode", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("calls writeSettings with { simpleFactoryMode: true } when enabled=true", async () => {
+    const { writeSettings } = await import("@/main/settings");
+    const handler = capturedHandlers.get("factory:toggle-simple-mode")!;
+    await handler(mockEvent, { enabled: true });
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ simpleFactoryMode: true }),
+    );
+  });
+
+  it("calls writeSettings with { simpleFactoryMode: false } when enabled=false", async () => {
+    const { writeSettings } = await import("@/main/settings");
+    const handler = capturedHandlers.get("factory:toggle-simple-mode")!;
+    await handler(mockEvent, { enabled: false });
+    expect(vi.mocked(writeSettings)).toHaveBeenCalledWith(
+      expect.objectContaining({ simpleFactoryMode: false }),
+    );
+  });
+});
+
+describe("simple factory mode — safety gates still active", () => {
+  beforeEach(restoreDbSelectToMockChain);
+
+  it("smoke-test gate (ScaffoldFailure) still fires in Simple Mode (dist/ missing)", async () => {
+    mockSettingsState.simpleFactoryMode = true;
+    registerFactoryHandlers();
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.stat).mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+    );
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, appName: "Simple Mode App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("quality gate (QualityGateRejection) still fires in Simple Mode", async () => {
+    mockSettingsState.simpleFactoryMode = true;
+    mockSettingsState.factoryScoreThreshold = 20;
+    registerFactoryHandlers();
+    const handler = capturedHandlers.get("factory:save-run")!;
+    const lowScoreIdea = makeIdea({ totalScore: 5 });
+    await expect(
+      handler(mockEvent, { idea: lowScoreIdea }),
+    ).rejects.toMatchObject({
+      kind: DyadErrorKind.QualityGateRejection,
+    });
   });
 });

@@ -64,6 +64,11 @@ const DEFAULT_SETTINGS: UserSettings = {
   // PR #14 — Outcome-weighted scoring: disabled by default until the user has
   // enough outcome data to make the signal useful.
   factoryOutcomeWeightedScoring: false,
+  // PR #15 — Simple Factory Mode: enabled by default so the solo-operator UI
+  // hides advanced panels (Stripe, LemonSqueezy, Plausible, Netlify, nightly
+  // jobs, outcome ingest) and shows only Idea → Generate → Checkout URL →
+  // Deploy to Vercel.  Safety gates remain active regardless of this setting.
+  simpleFactoryMode: true,
 };
 
 const SETTINGS_FILE = "user-settings.json";
