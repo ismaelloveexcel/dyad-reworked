@@ -198,14 +198,21 @@ Every scaffolded app includes all of the following sections:
 2. **Problem / Buyer** — `BUYER`, `PROBLEM`, and `VIRAL_TRIGGER`
 3. **Interactive tool** — textarea input, generate button, result display, copy + share actions
 4. **Pricing / Paywall** — pricing card with `MONETISATION` copy and `<CheckoutButton />`
-5. **Footer** — `<MadeWithDyad />`
+5. **Footer** — copyright notice
 
 ### CheckoutButton
 
-`scaffold/src/components/CheckoutButton.tsx` reads `VITE_LEMON_SQUEEZY_CHECKOUT_URL` from the Vite build environment.
+`scaffold/src/components/CheckoutButton.tsx` reads `VITE_CHECKOUT_URL` from the Vite build environment.
 
 - If the variable is set: renders a full-width "Buy Now" anchor button pointing to the checkout URL.
 - If the variable is **not** set: renders a **disabled** button with the label "Checkout not configured" so the flow is clearly broken and not silently missing.
+
+`VITE_CHECKOUT_URL` accepts any hosted payment or checkout link:
+- **Lemon Squeezy** — `https://app.lemonsqueezy.com → Products → Share → Checkout URL`
+- **Stripe Payment Link** — `https://dashboard.stripe.com → Payment Links`
+- **Gumroad** — product share URL
+- **Ko-fi** — commission/shop URL
+- **Manual payment page** — any URL you control
 
 The env variable must be documented in `scaffold/.env.example`. Copy it to `scaffold/.env` before running the app or deploying.
 

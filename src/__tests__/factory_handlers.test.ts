@@ -2565,7 +2565,7 @@ describe("factory:deploy-app", () => {
     // their own mockResolvedValueOnce or mockImplementation.
     const fsp = await import("fs/promises");
     vi.mocked(fsp.readFile).mockResolvedValue(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
+      "VITE_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
     );
   });
 
@@ -2612,7 +2612,7 @@ describe("factory:deploy-app", () => {
     } as any);
     // Checkout gate .env read (first readFile call) → passes gate
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
+      "VITE_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
     );
     // Actual deploy file read
     vi.mocked(mockReadFile).mockResolvedValueOnce(
@@ -2659,7 +2659,7 @@ describe("factory:deploy-app", () => {
     } as any);
     // Checkout gate .env read
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
+      "VITE_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
     );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<html/>") as any,
@@ -2700,7 +2700,7 @@ describe("factory:deploy-app", () => {
     } as any);
     // Checkout gate .env read
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
+      "VITE_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
     );
     // Actual deploy file read
     vi.mocked(mockReadFile).mockResolvedValueOnce(
@@ -2766,7 +2766,7 @@ describe("factory:deploy-app", () => {
     } as any);
     // Checkout gate .env read
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
+      "VITE_CHECKOUT_URL=https://example.lemonsqueezy.com/checkout" as any,
     );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<html/>") as any,
@@ -2811,13 +2811,13 @@ describe("factory:deploy-app", () => {
     });
   });
 
-  it("throws Precondition when .env exists but VITE_LEMON_SQUEEZY_CHECKOUT_URL is empty", async () => {
+  it("throws Precondition when .env exists but VITE_CHECKOUT_URL is empty", async () => {
     const { readFile: mockReadFile } = await import("fs/promises");
     mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
     mockSettingsState.vercelAccessToken = { value: "test-vercel-token" };
     // .env exists but the variable is unset
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=" as any,
+      "VITE_CHECKOUT_URL=" as any,
     );
     const handler = capturedHandlers.get("factory:deploy-app")!;
     await expect(
@@ -2828,7 +2828,7 @@ describe("factory:deploy-app", () => {
     });
   });
 
-  it("passes checkout gate when .env has a non-empty VITE_LEMON_SQUEEZY_CHECKOUT_URL", async () => {
+  it("passes checkout gate when .env has a non-empty VITE_CHECKOUT_URL", async () => {
     const {
       readdir: mockReaddir,
       readFile: mockReadFile,
@@ -2844,7 +2844,7 @@ describe("factory:deploy-app", () => {
     } as any);
     // .env with URL set → gate passes
     vi.mocked(mockReadFile).mockResolvedValueOnce(
-      "VITE_LEMON_SQUEEZY_CHECKOUT_URL=https://my-store.lemonsqueezy.com/checkout/buy/prod" as any,
+      "VITE_CHECKOUT_URL=https://my-store.lemonsqueezy.com/checkout/buy/prod" as any,
     );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<!doctype html><html/>") as any,
