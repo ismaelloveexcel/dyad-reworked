@@ -237,6 +237,8 @@ Where `<slug>` = `factorySlugFromName(ideaName, runId)` from `src/core/factory/p
 
 **The root `apps/` directory is NOT used for generated apps.** It exists only as a placeholder in the repository. Never write generated-app output to `apps/` or any path outside `<userData>/factory-apps/`.
 
+> **Known legacy exception:** `src/ipc/handlers/factory_validator.ts` still contains prompt text that references `NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_URL` and `/apps/${slug}`. Treat those references as legacy validator/prompt wording only, not as the factory-system standard. The canonical env var is `VITE_CHECKOUT_URL`, and the canonical generated-app path is always `<userData>/factory-apps/<slug>/`.
+
 - Smoke test (Node-only): `npm run smoke`
 - Brand tests: `npx vitest run src/__tests__/factory_brand.test.ts`
 - Must always have `// @vitest-environment node` at top of test files touching factory validators.

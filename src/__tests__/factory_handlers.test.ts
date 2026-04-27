@@ -2828,6 +2828,39 @@ describe("factory:deploy-app", () => {
     });
   });
 
+  it("throws Precondition when .env only has VITE_CHECKOUT_URL in a comment", async () => {
+    const { readFile: mockReadFile } = await import("fs/promises");
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
+    mockSettingsState.vercelAccessToken = { value: "test-vercel-token" };
+    // A commented-out line must NOT be treated as configured
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "# VITE_CHECKOUT_URL=https://example.com/checkout\nVITE_CHECKOUT_URL=" as any,
+    );
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({
+      kind: DyadErrorKind.Precondition,
+      message: expect.stringContaining("Checkout is not configured"),
+    });
+  });
+
+  it("throws Precondition when VITE_CHECKOUT_URL is set to quoted empty string", async () => {
+    const { readFile: mockReadFile } = await import("fs/promises");
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
+    mockSettingsState.vercelAccessToken = { value: "test-vercel-token" };
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      'VITE_CHECKOUT_URL=""' as any,
+    );
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({
+      kind: DyadErrorKind.Precondition,
+      message: expect.stringContaining("Checkout is not configured"),
+    });
+  });
+
   it("passes checkout gate when .env has a non-empty VITE_CHECKOUT_URL", async () => {
     const {
       readdir: mockReaddir,

@@ -19,21 +19,37 @@ const Index = () => {
   const [output, setOutput] = useState("");
   const [copied, setCopied] = useState(false);
 
+  const [copyError, setCopyError] = useState(false);
+
   const handleAnalyze = () => {
     setOutput(`Result for: ${input}`);
   };
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(output);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard API unavailable");
+      }
+      await navigator.clipboard.writeText(output);
+      setCopied(true);
+      setCopyError(false);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopyError(true);
+      setTimeout(() => setCopyError(false), 2000);
+    }
   };
 
-  const handleShare = () => {
+  const handleShare = async () => {
     if (navigator.share) {
-      void navigator.share({ title: APP_NAME, text: output });
+      try {
+        await navigator.share({ title: APP_NAME, text: output });
+      } catch {
+        // User cancelled share or it failed; fall back to copy
+        await handleCopy();
+      }
     } else {
-      void handleCopy();
+      await handleCopy();
     }
   };
 
@@ -92,9 +108,13 @@ const Index = () => {
                   size="sm"
                   onClick={() => void handleCopy()}
                 >
-                  {copied ? "Copied!" : "Copy"}
+                  {copyError ? "Copy failed" : copied ? "Copied!" : "Copy"}
                 </Button>
-                <Button variant="outline" size="sm" onClick={handleShare}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleShare()}
+                >
                   Share
                 </Button>
               </div>

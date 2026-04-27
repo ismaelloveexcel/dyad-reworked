@@ -20,6 +20,7 @@ import { eq } from "drizzle-orm";
 import log from "electron-log";
 import { app } from "electron";
 import { readdir, readFile, stat } from "fs/promises";
+import { parse as dotenvParse } from "dotenv";
 import { createHash } from "crypto";
 import path from "node:path";
 import { readSettings, writeSettings } from "@/main/settings";
@@ -559,8 +560,9 @@ export function registerFactoryDeployHandlers(): void {
       try {
         const envPath = path.join(appDir, ".env");
         const envContent = await readFile(envPath, "utf-8");
-        const match = envContent.match(/VITE_CHECKOUT_URL\s*=\s*(.+)/);
-        if (match && match[1].trim().length > 0) {
+        const parsed = dotenvParse(envContent);
+        const val = (parsed["VITE_CHECKOUT_URL"] ?? "").trim();
+        if (val.length > 0 && val !== '""' && val !== "''") {
           checkoutConfigured = true;
         }
       } catch {

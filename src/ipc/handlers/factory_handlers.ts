@@ -1347,9 +1347,11 @@ export function registerFactoryHandlers() {
             monetisationAngle = idea.monetisationAngle ?? "";
             viralTrigger = idea.viralTrigger ?? "";
           }
-        } catch {
+        } catch (err) {
           pushLog(
-            "Warning: could not load idea details from DB — buyer/problem fields will be empty.",
+            `Warning: could not load idea details from DB — buyer/problem fields will be empty. Error: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
           );
         }
 
@@ -1503,11 +1505,14 @@ export function registerFactoryHandlers() {
 
         // 2. Hero / app-name section — the codemod writes the app name into the
         //    <title> tag and into the page content. Check that the <title> is
-        //    not the scaffold template's placeholder value.
+        //    not the scaffold template's placeholder value — but only when the
+        //    user's actual app name is different from the placeholder (otherwise
+        //    having "dyad-generated-app" in the title is the correct result).
         const scaffoldPlaceholderTitle = "dyad-generated-app";
         if (
-          distHtml.includes(`<title>${scaffoldPlaceholderTitle}</title>`) ||
-          distHtml.includes(`<title>${scaffoldPlaceholderTitle} </title>`)
+          appName !== scaffoldPlaceholderTitle &&
+          (distHtml.includes(`<title>${scaffoldPlaceholderTitle}</title>`) ||
+            distHtml.includes(`<title>${scaffoldPlaceholderTitle} </title>`))
         ) {
           throw new DyadError(
             `Scaffold validation failed: dist/index.html still has the default scaffold title ("${scaffoldPlaceholderTitle}"). App name codemod may have failed.`,
