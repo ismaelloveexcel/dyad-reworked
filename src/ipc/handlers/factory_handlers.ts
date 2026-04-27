@@ -1503,14 +1503,14 @@ export function registerFactoryHandlers() {
 
         // 2. Hero / app-name section — the codemod writes the app name into the
         //    <title> tag and into the page content. Check that the <title> is
-        //    not the default scaffold placeholder.
-        const defaultTitle = "dyad-generated-app";
+        //    not the scaffold template's placeholder value.
+        const scaffoldPlaceholderTitle = "dyad-generated-app";
         if (
-          distHtml.includes(`<title>${defaultTitle}</title>`) ||
-          distHtml.includes(`<title>${defaultTitle} </title>`)
+          distHtml.includes(`<title>${scaffoldPlaceholderTitle}</title>`) ||
+          distHtml.includes(`<title>${scaffoldPlaceholderTitle} </title>`)
         ) {
           throw new DyadError(
-            `Scaffold validation failed: dist/index.html still has the default scaffold title ("${defaultTitle}"). App name codemod may have failed.`,
+            `Scaffold validation failed: dist/index.html still has the default scaffold title ("${scaffoldPlaceholderTitle}"). App name codemod may have failed.`,
             DyadErrorKind.ScaffoldFailure,
           );
         }

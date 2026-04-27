@@ -122,7 +122,7 @@ const Index = () => {
       </section>
 
       <footer className="py-8 px-4 text-center text-sm text-muted-foreground">
-        &copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.
+        &copy; {new Date().getFullYear()} {APP_NAME || "This App"}. All rights reserved.
       </footer>
     </div>
   );
