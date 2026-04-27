@@ -1318,23 +1318,61 @@ export function registerFactoryHandlers() {
         await writeFile(htmlPath, updatedHtml, "utf-8");
         pushLog("Patched index.html title.");
 
-        // 3. src/pages/Index.tsx — replace placeholder heading and sub-text.
+        // 3. src/pages/Index.tsx — replace __DYAD_*__ placeholder strings with
+        // app-specific content from the stored IdeaEvaluationResult.
         // Use JSON.stringify to produce safe JS string literals so characters
         // like `{`, `}`, `$`, and `\` cannot break JSX parsing or
         // String.replace special sequences.
         const indexTsxPath = path.join(destDir, "src", "pages", "Index.tsx");
         const indexTsx = await readFile(indexTsxPath, "utf-8");
+
+        // Load the full idea from DB so we can inject buyer/problem/monetisation
+        // details into the template. Non-fatal: falls back to empty strings.
+        let buyer = "";
+        let problem = "";
+        let monetisationAngle = "";
+        let viralTrigger = "";
+        try {
+          const ideaRows = await db
+            .select({ ideaJson: factoryRuns.ideaJson })
+            .from(factoryRuns)
+            .where(eq(factoryRuns.id, runId))
+            .limit(1);
+          if (ideaRows.length > 0) {
+            const idea = JSON.parse(
+              ideaRows[0].ideaJson,
+            ) as IdeaEvaluationResult;
+            buyer = idea.buyer ?? "";
+            problem = idea.idea ?? "";
+            monetisationAngle = idea.monetisationAngle ?? "";
+            viralTrigger = idea.viralTrigger ?? "";
+          }
+        } catch {
+          pushLog(
+            "Warning: could not load idea details from DB — buyer/problem fields will be empty.",
+          );
+        }
+
         // JSON.stringify wraps in quotes — strip them for embedding in JSX text
         const safeAppNameJs = JSON.stringify(appName).slice(1, -1);
         const safeTaglineJs = JSON.stringify(
           tagline ?? "Built with Dyad.",
         ).slice(1, -1);
+        const safeBuyerJs = JSON.stringify(buyer).slice(1, -1);
+        const safeProblemJs = JSON.stringify(problem).slice(1, -1);
+        const safeMonetisationJs = JSON.stringify(monetisationAngle).slice(
+          1,
+          -1,
+        );
+        const safeViralTriggerJs = JSON.stringify(viralTrigger).slice(1, -1);
+
         const patchedIndexTsx = indexTsx
-          .replace(/Welcome to Your Blank App/g, () => safeAppNameJs)
-          .replace(
-            /Start building your amazing project here!/g,
-            () => safeTaglineJs,
-          );
+          .replace(/__DYAD_APP_NAME__/g, () => safeAppNameJs)
+          .replace(/__DYAD_TAGLINE__/g, () => safeTaglineJs)
+          .replace(/__DYAD_BUYER__/g, () => safeBuyerJs)
+          .replace(/__DYAD_PROBLEM__/g, () => safeProblemJs)
+          .replace(/__DYAD_MONETISATION__/g, () => safeMonetisationJs)
+          .replace(/__DYAD_VIRAL_TRIGGER__/g, () => safeViralTriggerJs);
         await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
         pushLog("Patched src/pages/Index.tsx content.");
 

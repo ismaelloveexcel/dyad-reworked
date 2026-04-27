@@ -1365,8 +1365,12 @@ describe("factory:list-outcomes", () => {
 // ---------------------------------------------------------------------------
 
 describe("factory:scaffold-app", () => {
-  // Reset fs/socket mocks before each test in this suite
+  // Reset fs/socket mocks before each test in this suite.
+  // Also restore db.select to the standard mockDbState chain —
+  // factory:list-outcomes overrides db.select and vi.clearAllMocks() does not
+  // reset implementations, so tests after list-outcomes need this call.
   beforeEach(async () => {
+    await restoreDbSelectToMockChain();
     const fsp = await import("fs/promises");
     const fileUtils = await import("@/ipc/utils/file_utils");
     const socketFirewall = await import("@/ipc/utils/socket_firewall");
@@ -1511,7 +1515,7 @@ describe("factory:scaffold-app", () => {
     vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
       if (String(filePath).endsWith("Index.tsx")) {
         return Promise.resolve(
-          "Welcome to Your Blank App\nStart building your amazing project here!",
+          "__DYAD_APP_NAME__\n__DYAD_TAGLINE__\n__DYAD_BUYER__\n__DYAD_PROBLEM__\n__DYAD_MONETISATION__\n__DYAD_VIRAL_TRIGGER__",
         ) as Promise<any>;
       }
       return Promise.resolve("") as Promise<any>;
@@ -1529,9 +1533,60 @@ describe("factory:scaffold-app", () => {
     // The $ and { characters should appear literally (escaped via JSON.stringify)
     expect(output).toContain("$pecial");
     expect(output).toContain("{braces}");
-    // Should not contain the original placeholders
-    expect(output).not.toContain("Welcome to Your Blank App");
-    expect(output).not.toContain("Start building your amazing project here!");
+    // Should not contain the original placeholder tokens
+    expect(output).not.toContain("__DYAD_APP_NAME__");
+    expect(output).not.toContain("__DYAD_TAGLINE__");
+    expect(output).not.toContain("__DYAD_BUYER__");
+    expect(output).not.toContain("__DYAD_PROBLEM__");
+    expect(output).not.toContain("__DYAD_MONETISATION__");
+    expect(output).not.toContain("__DYAD_VIRAL_TRIGGER__");
+  });
+
+  it("injects buyer and problem from DB idea into Index.tsx placeholders", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).endsWith("Index.tsx")) {
+        return Promise.resolve(
+          "__DYAD_BUYER__ __DYAD_PROBLEM__ __DYAD_MONETISATION__ __DYAD_VIRAL_TRIGGER__",
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    // Set up a DB row with the full idea for runId=12
+    mockDbState.rows = [
+      {
+        id: 12,
+        ideaJson: JSON.stringify({
+          idea: "Automated invoice tracking",
+          name: "InvoicePro",
+          buyer: "UAE freelancers",
+          monetisationAngle: "One-time $29 unlock",
+          viralTrigger: "Share your invoice stats",
+          scores: {},
+          totalScore: 30,
+          decision: "BUILD",
+          reason: "High demand",
+          improvedIdea: "",
+          buildPrompt: "",
+          fallbackUsed: false,
+        }),
+      },
+    ];
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await handler(mockEvent, {
+      runId: 12,
+      appName: "InvoicePro",
+      tagline: "Invoices sorted",
+    });
+    mockDbState.rows = [];
+    const writeCalls = vi.mocked(fsp.writeFile).mock.calls;
+    const tsxWrite = writeCalls.find((c) => String(c[0]).endsWith("Index.tsx"));
+    expect(tsxWrite).toBeDefined();
+    const output = String(tsxWrite![1]);
+    expect(output).toContain("UAE freelancers");
+    expect(output).toContain("Automated invoice tracking");
+    expect(output).toContain("One-time $29 unlock");
+    expect(output).toContain("Share your invoice stats");
   });
 
   // -------------------------------------------------------------------------
