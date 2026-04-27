@@ -3,7 +3,6 @@
 // __DYAD_MONETISATION__, __DYAD_VIRAL_TRIGGER__ are substituted at scaffold time.
 
 import { useState } from "react";
-import { MadeWithDyad } from "@/components/made-with-dyad";
 import { CheckoutButton } from "@/components/CheckoutButton";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -122,7 +121,9 @@ const Index = () => {
         </div>
       </section>
 
-      <MadeWithDyad />
+      <footer className="py-8 px-4 text-center text-sm text-muted-foreground">
+        &copy; {new Date().getFullYear()} {APP_NAME}. All rights reserved.
+      </footer>
     </div>
   );
 };

@@ -1463,6 +1463,80 @@ export function registerFactoryHandlers() {
         }
 
         pushLog(`Preview available at: ${previewPath}`);
+
+        // -----------------------------------------------------------------------
+        // PR #15 — Smoke-test gate: validate the generated artifact before
+        // declaring scaffold successful.
+        // Fail immediately with a clear message if any of the following are true:
+        //   1. dist/index.html is missing
+        //   2. Unreplaced __DYAD_*__ placeholders survive in the HTML
+        //   3. The hero/app-name section is absent
+        //   4. The pricing/paywall section is absent
+        //   5. The checkout button marker is absent
+        // -----------------------------------------------------------------------
+        const distIndexHtmlPath = path.join(previewPath, "index.html");
+        let distHtml: string;
+        try {
+          distHtml = await readFile(distIndexHtmlPath, "utf-8");
+        } catch {
+          throw new DyadError(
+            `Scaffold validation failed: dist/index.html not found at "${distIndexHtmlPath}".`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 1. Unreplaced __DYAD_*__ placeholders
+        const remainingPlaceholders = [
+          "__DYAD_APP_NAME__",
+          "__DYAD_TAGLINE__",
+          "__DYAD_BUYER__",
+          "__DYAD_PROBLEM__",
+          "__DYAD_MONETISATION__",
+          "__DYAD_VIRAL_TRIGGER__",
+        ].filter((p) => distHtml.includes(p));
+        if (remainingPlaceholders.length > 0) {
+          throw new DyadError(
+            `Scaffold validation failed: generated dist/index.html still contains unreplaced placeholders: ${remainingPlaceholders.join(", ")}.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 2. Hero / app-name section — the codemod writes the app name into the
+        //    <title> tag and into the page content. Check that the <title> is
+        //    not the default scaffold placeholder.
+        const defaultTitle = "dyad-generated-app";
+        if (
+          distHtml.includes(`<title>${defaultTitle}</title>`) ||
+          distHtml.includes(`<title>${defaultTitle} </title>`)
+        ) {
+          throw new DyadError(
+            `Scaffold validation failed: dist/index.html still has the default scaffold title ("${defaultTitle}"). App name codemod may have failed.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 3. Pricing/paywall section marker — the template uses the fixed
+        //    text "Unlock full access" as the pricing heading.
+        if (!distHtml.includes("Unlock full access")) {
+          throw new DyadError(
+            `Scaffold validation failed: pricing/paywall section not found in dist/index.html. Expected "Unlock full access" heading.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 4. Checkout button marker — CheckoutButton renders either "Buy Now"
+        //    (configured) or "Checkout not configured" (missing env var).
+        const hasCheckout =
+          distHtml.includes("Buy Now") ||
+          distHtml.includes("Checkout not configured");
+        if (!hasCheckout) {
+          throw new DyadError(
+            `Scaffold validation failed: checkout button not found in dist/index.html. CheckoutButton component may be missing.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        pushLog("Scaffold validation passed.");
         return { previewPath, logs };
       } catch (err) {
         if (err instanceof DyadError) throw err;
