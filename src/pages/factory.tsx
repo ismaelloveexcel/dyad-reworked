@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   type IdeaEvaluationResult,
   type PatternEntry,
@@ -1109,12 +1109,11 @@ function SimpleSetupChecklist({
   systemStatus: SystemStatusForSetup;
   onToggleAdvanced: () => void;
 }) {
-  const items: {
+  const checkItems: {
     label: string;
     status: "ok" | "missing";
     okLabel: string;
     missingLabel: string;
-    note?: string;
   }[] = [
     {
       label: "AI provider key",
@@ -1127,13 +1126,6 @@ function SimpleSetupChecklist({
       status: systemStatus.vercelTokenPresent ? "ok" : "missing",
       okLabel: "Vercel connected",
       missingLabel: "Vercel token missing — set in Settings",
-    },
-    {
-      label: "Checkout URL",
-      status: "missing",
-      okLabel: "Checkout link configured",
-      missingLabel: "Checkout link missing — set VITE_CHECKOUT_URL in .env before deploying",
-      note: "Set VITE_CHECKOUT_URL in the scaffolded app's .env file. Deploy is blocked until this is present.",
     },
   ];
 
@@ -1151,7 +1143,7 @@ function SimpleSetupChecklist({
         </button>
       </div>
       <div className="space-y-2">
-        {items.map((item) => (
+        {checkItems.map((item) => (
           <div key={item.label} className="flex items-start gap-3">
             <span
               className={`mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold ${
@@ -1169,12 +1161,22 @@ function SimpleSetupChecklist({
               >
                 {item.status === "ok" ? item.okLabel : item.missingLabel}
               </p>
-              {item.note && item.status === "missing" && (
-                <p className="text-xs text-zinc-600 mt-0.5 italic">{item.note}</p>
-              )}
             </div>
           </div>
         ))}
+        {/* Checkout URL is per-app (set in each scaffold's .env); shown as a reminder, not a global status */}
+        <div className="flex items-start gap-3">
+          <span className="mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold bg-amber-900/40 text-amber-500 border border-amber-800">
+            !
+          </span>
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-zinc-300">Checkout URL (per app)</p>
+            <p className="text-xs text-zinc-500">
+              Set <code className="font-mono">VITE_CHECKOUT_URL</code> in the scaffolded app's <code className="font-mono">.env</code> file.
+              Deploy is blocked until this is present.
+            </p>
+          </div>
+        </div>
       </div>
       <div className="pt-2 border-t border-zinc-800">
         <p className="text-xs text-zinc-600">
@@ -2668,9 +2670,14 @@ export default function FactoryPage() {
   // PR #15 — Simple Factory Mode: true by default, read from systemStatus once loaded.
   const simpleMode = systemStatus?.simpleFactoryMode ?? true;
 
+  const queryClient = useQueryClient();
   const toggleSimpleModeMutation = useMutation({
     mutationFn: (enabled: boolean) =>
       factoryClient.toggleSimpleMode({ enabled }),
+    onSuccess: () => {
+      // Invalidate systemStatus so the UI reflects the new mode immediately.
+      queryClient.invalidateQueries({ queryKey: queryKeys.factory.systemStatus });
+    },
   });
 
   const handleToggleSimpleMode = (enabled: boolean) => {
