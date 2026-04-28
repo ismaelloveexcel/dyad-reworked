@@ -1431,6 +1431,50 @@ export function registerFactoryHandlers() {
           );
         }
 
+        // -----------------------------------------------------------------------
+        // Smoke-test: read dist/index.html and verify scaffold quality markers.
+        // This gate catches: codemod failures, missing paywall section, and
+        // missing checkout button before the app is considered ready to deploy.
+        // It does not check VITE_CHECKOUT_URL (that is the deploy-time guard).
+        // -----------------------------------------------------------------------
+        const indexHtmlPath = path.join(previewPath, "index.html");
+        let indexHtml: string;
+        try {
+          indexHtml = await readFile(indexHtmlPath, "utf-8");
+        } catch {
+          throw new DyadError(
+            `Smoke-test failed: dist/index.html not found at "${indexHtmlPath}".`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+        if (/__DYAD_[A-Z_]+__/.test(indexHtml)) {
+          throw new DyadError(
+            "Smoke-test failed: unreplaced __DYAD_*__ placeholders found in dist/index.html.",
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+        if (indexHtml.includes("<title>dyad-generated-app</title>")) {
+          throw new DyadError(
+            "Smoke-test failed: default scaffold title still present in dist/index.html.",
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+        if (!indexHtml.includes("Unlock full access")) {
+          throw new DyadError(
+            "Smoke-test failed: pricing/paywall section missing from dist/index.html.",
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+        if (
+          !indexHtml.includes("Buy Now") &&
+          !indexHtml.includes("Checkout not configured")
+        ) {
+          throw new DyadError(
+            "Smoke-test failed: checkout button missing from dist/index.html.",
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
         pushLog(`Preview available at: ${previewPath}`);
         return { previewPath, logs };
       } catch (err) {

@@ -1374,7 +1374,17 @@ describe("factory:scaffold-app", () => {
     const fileUtils = await import("@/ipc/utils/file_utils");
     const socketFirewall = await import("@/ipc/utils/socket_firewall");
     vi.mocked(fsp.rm).mockResolvedValue(undefined);
-    vi.mocked(fsp.readFile).mockResolvedValue("" as any);
+    // Return valid smoke-test content for dist/index.html; empty string for all
+    // other reads (package.json, Index.tsx, brand.css source, etc.).
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      const p = String(filePath);
+      if (p.includes("dist") && p.endsWith("index.html")) {
+        return Promise.resolve(
+          '<title>My App</title><meta name="dyad-paywall" content="Unlock full access" /><meta name="dyad-checkout" content="Buy Now" />',
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
     vi.mocked(fsp.writeFile).mockResolvedValue(undefined);
     vi.mocked(fsp.stat).mockResolvedValue({ isDirectory: () => true } as any);
     vi.mocked(fileUtils.copyDirectoryRecursive).mockResolvedValue(undefined);
@@ -1486,7 +1496,15 @@ describe("factory:scaffold-app", () => {
   it("patches index.html with the app name", async () => {
     const fsp = await import("fs/promises");
     vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
-      if (String(filePath).endsWith("index.html")) {
+      const p = String(filePath);
+      // dist/index.html: return valid smoke-test content so the gate passes
+      if (p.includes("dist") && p.endsWith("index.html")) {
+        return Promise.resolve(
+          '<title>Salary&lt;&amp;&gt;Tool</title><meta name="dyad-paywall" content="Unlock full access" /><meta name="dyad-checkout" content="Buy Now" />',
+        ) as Promise<any>;
+      }
+      // Scaffold template index.html: return the placeholder title for codemod
+      if (p.endsWith("index.html")) {
         return Promise.resolve(
           "<title>dyad-generated-app</title>",
         ) as Promise<any>;
@@ -1512,7 +1530,14 @@ describe("factory:scaffold-app", () => {
   it("uses JSON.stringify-safe substitution for JSX codemod", async () => {
     const fsp = await import("fs/promises");
     vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
-      if (String(filePath).endsWith("Index.tsx")) {
+      const p = String(filePath);
+      // dist/index.html: return valid smoke-test content so the gate passes
+      if (p.includes("dist") && p.endsWith("index.html")) {
+        return Promise.resolve(
+          '<title>My App</title><meta name="dyad-paywall" content="Unlock full access" /><meta name="dyad-checkout" content="Buy Now" />',
+        ) as Promise<any>;
+      }
+      if (p.endsWith("Index.tsx")) {
         return Promise.resolve(
           "Welcome to Your Blank App\nStart building your amazing project here!",
         ) as Promise<any>;
@@ -1578,6 +1603,77 @@ describe("factory:scaffold-app", () => {
       .mocked(fsp.writeFile)
       .mock.calls.find((c) => String(c[0]).endsWith("brand.css"));
     expect(brandWrite).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // PR #15 — Smoke-test gate on dist/index.html
+  // -------------------------------------------------------------------------
+
+  it("throws ScaffoldFailure when dist/index.html is missing", async () => {
+    const fsp = await import("fs/promises");
+    // stat(dist/) succeeds but readFile(dist/index.html) throws
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("dist") && String(filePath).endsWith("index.html")) {
+        return Promise.reject(
+          Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+        );
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 12, appName: "Missing Html App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws ScaffoldFailure when dist/index.html contains unreplaced __DYAD_*__ placeholders", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("dist") && String(filePath).endsWith("index.html")) {
+        return Promise.resolve(
+          '<title>My App</title>__DYAD_APPNAME__<meta name="dyad-paywall" content="Unlock full access" /><meta name="dyad-checkout" content="Buy Now" />',
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 13, appName: "Placeholder App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws ScaffoldFailure when pricing/paywall section is missing from dist/index.html", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("dist") && String(filePath).endsWith("index.html")) {
+        // Missing "Unlock full access"
+        return Promise.resolve(
+          '<title>My App</title><meta name="dyad-checkout" content="Buy Now" />',
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 14, appName: "No Paywall App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
+  });
+
+  it("throws ScaffoldFailure when checkout button marker is missing from dist/index.html", async () => {
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).includes("dist") && String(filePath).endsWith("index.html")) {
+        // Missing "Buy Now" / "Checkout not configured"
+        return Promise.resolve(
+          '<title>My App</title><meta name="dyad-paywall" content="Unlock full access" />',
+        ) as Promise<any>;
+      }
+      return Promise.resolve("") as Promise<any>;
+    });
+    const handler = capturedHandlers.get("factory:scaffold-app")!;
+    await expect(
+      handler(mockEvent, { runId: 15, appName: "No Checkout App" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.ScaffoldFailure });
   });
 });
 
@@ -2343,7 +2439,22 @@ describe("factory:get-similar-runs", () => {
 // ---------------------------------------------------------------------------
 
 describe("factory:deploy-app", () => {
-  beforeEach(restoreDbSelectToMockChain);
+  beforeEach(async () => {
+    await restoreDbSelectToMockChain();
+    // Default: .env reads return a configured VITE_CHECKOUT_URL so tests that
+    // don't specifically test the checkout guard pass through to their own
+    // assertions.  Tests that exercise the checkout guard override this with
+    // mockResolvedValueOnce / mockRejectedValueOnce before calling the handler.
+    const fsp = await import("fs/promises");
+    vi.mocked(fsp.readFile).mockImplementation((filePath: unknown) => {
+      if (String(filePath).endsWith(".env")) {
+        return Promise.resolve(
+          "VITE_CHECKOUT_URL=https://checkout.example.com",
+        ) as Promise<any>;
+      }
+      return Promise.resolve(Buffer.from("")) as Promise<any>;
+    });
+  });
 
   it("throws NotFound when the run does not exist in DB", async () => {
     mockDbState.rows = [];
@@ -2386,6 +2497,10 @@ describe("factory:deploy-app", () => {
     vi.mocked(mockStat).mockResolvedValueOnce({
       isDirectory: () => false, // index.html is a file
     } as any);
+    // Checkout guard reads appDir/.env first; file content read comes second
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "VITE_CHECKOUT_URL=https://checkout.example.com" as any,
+    );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<!doctype html><html/>") as any,
     );
@@ -2428,6 +2543,10 @@ describe("factory:deploy-app", () => {
     vi.mocked(mockStat).mockResolvedValueOnce({
       isDirectory: () => false,
     } as any);
+    // Checkout guard reads appDir/.env first; file content read comes second
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "VITE_CHECKOUT_URL=https://checkout.example.com" as any,
+    );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<html/>") as any,
     );
@@ -2465,6 +2584,10 @@ describe("factory:deploy-app", () => {
     vi.mocked(mockStat).mockResolvedValueOnce({
       isDirectory: () => false, // index.html is a file
     } as any);
+    // Checkout guard reads appDir/.env first; file content read comes second
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "VITE_CHECKOUT_URL=https://checkout.example.com" as any,
+    );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<!doctype html><html/>") as any,
     );
@@ -2526,6 +2649,10 @@ describe("factory:deploy-app", () => {
     vi.mocked(mockStat).mockResolvedValueOnce({
       isDirectory: () => false,
     } as any);
+    // Checkout guard reads appDir/.env first; file content read comes second
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "VITE_CHECKOUT_URL=https://checkout.example.com" as any,
+    );
     vi.mocked(mockReadFile).mockResolvedValueOnce(
       Buffer.from("<html/>") as any,
     );
@@ -2546,6 +2673,76 @@ describe("factory:deploy-app", () => {
     await expect(
       handler(mockEvent, { runId: 1, provider: "netlify" }),
     ).rejects.toMatchObject({ kind: DyadErrorKind.DeployFailure });
+  });
+
+  // -------------------------------------------------------------------------
+  // PR #15 — Checkout guard: VITE_CHECKOUT_URL required before deploy
+  // -------------------------------------------------------------------------
+
+  it("throws Precondition when appDir/.env is missing (no VITE_CHECKOUT_URL)", async () => {
+    const { readFile: mockReadFile } = await import("fs/promises");
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
+    mockSettingsState.vercelAccessToken = { value: "tok" };
+    // Override the default implementation: .env read throws ENOENT
+    vi.mocked(mockReadFile).mockRejectedValueOnce(
+      Object.assign(new Error("ENOENT"), { code: "ENOENT" }),
+    );
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Precondition });
+  });
+
+  it("throws Precondition when VITE_CHECKOUT_URL is present but empty", async () => {
+    const { readFile: mockReadFile } = await import("fs/promises");
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
+    mockSettingsState.vercelAccessToken = { value: "tok" };
+    // .env exists but value is empty
+    vi.mocked(mockReadFile).mockResolvedValueOnce("VITE_CHECKOUT_URL=" as any);
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    await expect(
+      handler(mockEvent, { runId: 1, provider: "vercel" }),
+    ).rejects.toMatchObject({ kind: DyadErrorKind.Precondition });
+  });
+
+  it("proceeds past checkout guard when VITE_CHECKOUT_URL is non-empty", async () => {
+    const {
+      readdir: mockReaddir,
+      readFile: mockReadFile,
+      stat: mockStat,
+    } = await import("fs/promises");
+
+    vi.mocked(mockReaddir).mockResolvedValueOnce(["index.html"] as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => true } as any);
+    vi.mocked(mockStat).mockResolvedValueOnce({ isDirectory: () => false } as any);
+    // .env with valid URL — explicitly queued so it fires first
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      "VITE_CHECKOUT_URL=https://store.example.com/buy" as any,
+    );
+    vi.mocked(mockReadFile).mockResolvedValueOnce(
+      Buffer.from("<html/>") as any,
+    );
+
+    mockDbState.rows = [{ id: 1, ideaJson: JSON.stringify(makeIdea()) }];
+    mockSettingsState.vercelAccessToken = { value: "test-token" };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({ url: "my-app.vercel.app", id: "dpl_ok" }),
+        text: () => Promise.resolve(""),
+      }),
+    );
+
+    const handler = capturedHandlers.get("factory:deploy-app")!;
+    const result = (await handler(mockEvent, {
+      runId: 1,
+      provider: "vercel",
+    })) as { url: string; provider: string };
+    expect(result.provider).toBe("vercel");
   });
 });
 

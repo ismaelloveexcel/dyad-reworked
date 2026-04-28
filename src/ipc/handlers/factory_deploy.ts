@@ -568,6 +568,35 @@ export function registerFactoryDeployHandlers(): void {
         );
       }
 
+      // -----------------------------------------------------------------------
+      // Checkout guard: VITE_CHECKOUT_URL must be present in the app's .env
+      // before deploying.  The variable is per-app (not a global setting), so
+      // we read it directly from the generated app directory.
+      // -----------------------------------------------------------------------
+      const appDir = path.dirname(distDir);
+      const envPath = path.join(appDir, ".env");
+      let envContent: string;
+      try {
+        envContent = await readFile(envPath, "utf-8");
+      } catch {
+        throw new DyadError(
+          "Checkout is not configured. Add VITE_CHECKOUT_URL before deploying.",
+          DyadErrorKind.Precondition,
+        );
+      }
+      const checkoutUrl = envContent
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => line.startsWith("VITE_CHECKOUT_URL="))
+        ?.slice("VITE_CHECKOUT_URL=".length)
+        .trim();
+      if (!checkoutUrl) {
+        throw new DyadError(
+          "Checkout is not configured. Add VITE_CHECKOUT_URL before deploying.",
+          DyadErrorKind.Precondition,
+        );
+      }
+
       const settings = readSettings();
 
       if (provider === "vercel") {
