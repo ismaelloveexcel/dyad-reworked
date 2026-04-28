@@ -175,7 +175,70 @@ The scaffold template (`scaffold/`) ships a brand design system that the scaffol
 
 ---
 
-- Unit tests: `npx vitest run src/__tests__/factory_validator.test.ts`
+## Scaffold Output — Real App Template (PR #15)
+
+The scaffold template (`scaffold/src/pages/Index.tsx`) generates a **real sellable app**, not a blank placeholder. The `factory:scaffold-app` handler replaces the following placeholder strings at scaffold time:
+
+| Placeholder              | Source field (`IdeaEvaluationResult`) |
+| ------------------------ | ------------------------------------- |
+| `__DYAD_APP_NAME__`      | `appName` input parameter             |
+| `__DYAD_TAGLINE__`       | `tagline` input parameter             |
+| `__DYAD_BUYER__`         | `idea.buyer`                          |
+| `__DYAD_PROBLEM__`       | `idea.idea`                           |
+| `__DYAD_MONETISATION__`  | `idea.monetisationAngle`              |
+| `__DYAD_VIRAL_TRIGGER__` | `idea.viralTrigger`                   |
+
+The handler loads the full `IdeaEvaluationResult` from DB using `runId` to inject the buyer-specific content. The DB lookup is non-fatal: if the row is missing, all content fields fall back to empty strings.
+
+### Generated app sections
+
+Every scaffolded app includes all of the following sections:
+
+1. **Hero** — brand-colored header with `APP_NAME`, `TAGLINE`, and a "Try it free" CTA anchor
+2. **Problem / Buyer** — `BUYER`, `PROBLEM`, and `VIRAL_TRIGGER`
+3. **Interactive tool** — textarea input, generate button, result display, copy + share actions
+4. **Pricing / Paywall** — pricing card with `MONETISATION` copy and `<CheckoutButton />`
+5. **Footer** — copyright notice
+
+### CheckoutButton
+
+`scaffold/src/components/CheckoutButton.tsx` reads `VITE_CHECKOUT_URL` from the Vite build environment.
+
+- If the variable is set: renders a full-width "Buy Now" anchor button pointing to the checkout URL.
+- If the variable is **not** set: renders a **disabled** button with the label "Checkout not configured" so the flow is clearly broken and not silently missing.
+
+`VITE_CHECKOUT_URL` accepts any hosted payment or checkout link:
+- **Lemon Squeezy** — `https://app.lemonsqueezy.com → Products → Share → Checkout URL`
+- **Stripe Payment Link** — `https://dashboard.stripe.com → Payment Links`
+- **Gumroad** — product share URL
+- **Ko-fi** — commission/shop URL
+- **Manual payment page** — any URL you control
+
+The env variable must be documented in `scaffold/.env.example`. Copy it to `scaffold/.env` before running the app or deploying.
+
+---
+
+## Canonical Generated-App Path
+
+**ONE** canonical path is used across all factory sub-systems:
+
+```
+<userData>/factory-apps/<slug>/
+```
+
+Where `<slug>` = `factorySlugFromName(ideaName, runId)` from `src/core/factory/persist.ts`.
+
+| Sub-system              | Resolved path                                |
+| ----------------------- | -------------------------------------------- |
+| scaffold                | `<userData>/factory-apps/<slug>/`            |
+| build output            | `<userData>/factory-apps/<slug>/dist/`       |
+| launch-kit export       | `<userData>/factory-apps/<slug>/launch-kit/` |
+| deploy (Vercel/Netlify) | reads `<userData>/factory-apps/<slug>/dist/` |
+
+**The root `apps/` directory is NOT used for generated apps.** It exists only as a placeholder in the repository. Never write generated-app output to `apps/` or any path outside `<userData>/factory-apps/`.
+
+> **Known legacy exception:** `src/ipc/handlers/factory_validator.ts` still contains prompt text that references `NEXT_PUBLIC_LEMON_SQUEEZY_CHECKOUT_URL` and `/apps/${slug}`. Treat those references as legacy validator/prompt wording only, not as the factory-system standard. The canonical env var is `VITE_CHECKOUT_URL`, and the canonical generated-app path is always `<userData>/factory-apps/<slug>/`.
+
 - Smoke test (Node-only): `npm run smoke`
 - Brand tests: `npx vitest run src/__tests__/factory_brand.test.ts`
 - Must always have `// @vitest-environment node` at top of test files touching factory validators.

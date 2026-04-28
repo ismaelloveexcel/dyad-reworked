@@ -1318,23 +1318,63 @@ export function registerFactoryHandlers() {
         await writeFile(htmlPath, updatedHtml, "utf-8");
         pushLog("Patched index.html title.");
 
-        // 3. src/pages/Index.tsx — replace placeholder heading and sub-text.
+        // 3. src/pages/Index.tsx — replace __DYAD_*__ placeholder strings with
+        // app-specific content from the stored IdeaEvaluationResult.
         // Use JSON.stringify to produce safe JS string literals so characters
         // like `{`, `}`, `$`, and `\` cannot break JSX parsing or
         // String.replace special sequences.
         const indexTsxPath = path.join(destDir, "src", "pages", "Index.tsx");
         const indexTsx = await readFile(indexTsxPath, "utf-8");
+
+        // Load the full idea from DB so we can inject buyer/problem/monetisation
+        // details into the template. Non-fatal: falls back to empty strings.
+        let buyer = "";
+        let problem = "";
+        let monetisationAngle = "";
+        let viralTrigger = "";
+        try {
+          const ideaRows = await db
+            .select({ ideaJson: factoryRuns.ideaJson })
+            .from(factoryRuns)
+            .where(eq(factoryRuns.id, runId))
+            .limit(1);
+          if (ideaRows.length > 0) {
+            const idea = JSON.parse(
+              ideaRows[0].ideaJson,
+            ) as IdeaEvaluationResult;
+            buyer = idea.buyer ?? "";
+            problem = idea.idea ?? "";
+            monetisationAngle = idea.monetisationAngle ?? "";
+            viralTrigger = idea.viralTrigger ?? "";
+          }
+        } catch (err) {
+          pushLog(
+            `Warning: could not load idea details from DB — buyer/problem fields will be empty. Error: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+
         // JSON.stringify wraps in quotes — strip them for embedding in JSX text
         const safeAppNameJs = JSON.stringify(appName).slice(1, -1);
         const safeTaglineJs = JSON.stringify(
           tagline ?? "Built with Dyad.",
         ).slice(1, -1);
+        const safeBuyerJs = JSON.stringify(buyer).slice(1, -1);
+        const safeProblemJs = JSON.stringify(problem).slice(1, -1);
+        const safeMonetisationJs = JSON.stringify(monetisationAngle).slice(
+          1,
+          -1,
+        );
+        const safeViralTriggerJs = JSON.stringify(viralTrigger).slice(1, -1);
+
         const patchedIndexTsx = indexTsx
-          .replace(/Welcome to Your Blank App/g, () => safeAppNameJs)
-          .replace(
-            /Start building your amazing project here!/g,
-            () => safeTaglineJs,
-          );
+          .replace(/__DYAD_APP_NAME__/g, () => safeAppNameJs)
+          .replace(/__DYAD_TAGLINE__/g, () => safeTaglineJs)
+          .replace(/__DYAD_BUYER__/g, () => safeBuyerJs)
+          .replace(/__DYAD_PROBLEM__/g, () => safeProblemJs)
+          .replace(/__DYAD_MONETISATION__/g, () => safeMonetisationJs)
+          .replace(/__DYAD_VIRAL_TRIGGER__/g, () => safeViralTriggerJs);
         await writeFile(indexTsxPath, patchedIndexTsx, "utf-8");
         pushLog("Patched src/pages/Index.tsx content.");
 
@@ -1425,6 +1465,83 @@ export function registerFactoryHandlers() {
         }
 
         pushLog(`Preview available at: ${previewPath}`);
+
+        // -----------------------------------------------------------------------
+        // PR #15 — Smoke-test gate: validate the generated artifact before
+        // declaring scaffold successful.
+        // Fail immediately with a clear message if any of the following are true:
+        //   1. dist/index.html is missing
+        //   2. Unreplaced __DYAD_*__ placeholders survive in the HTML
+        //   3. The hero/app-name section is absent
+        //   4. The pricing/paywall section is absent
+        //   5. The checkout button marker is absent
+        // -----------------------------------------------------------------------
+        const distIndexHtmlPath = path.join(previewPath, "index.html");
+        let distHtml: string;
+        try {
+          distHtml = await readFile(distIndexHtmlPath, "utf-8");
+        } catch {
+          throw new DyadError(
+            `Scaffold validation failed: dist/index.html not found at "${distIndexHtmlPath}".`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 1. Unreplaced __DYAD_*__ placeholders
+        const remainingPlaceholders = [
+          "__DYAD_APP_NAME__",
+          "__DYAD_TAGLINE__",
+          "__DYAD_BUYER__",
+          "__DYAD_PROBLEM__",
+          "__DYAD_MONETISATION__",
+          "__DYAD_VIRAL_TRIGGER__",
+        ].filter((p) => distHtml.includes(p));
+        if (remainingPlaceholders.length > 0) {
+          throw new DyadError(
+            `Scaffold validation failed: generated dist/index.html still contains unreplaced placeholders: ${remainingPlaceholders.join(", ")}.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 2. Hero / app-name section — the codemod writes the app name into the
+        //    <title> tag and into the page content. Check that the <title> is
+        //    not the scaffold template's placeholder value — but only when the
+        //    user's actual app name is different from the placeholder (otherwise
+        //    having "dyad-generated-app" in the title is the correct result).
+        const scaffoldPlaceholderTitle = "dyad-generated-app";
+        if (
+          appName !== scaffoldPlaceholderTitle &&
+          (distHtml.includes(`<title>${scaffoldPlaceholderTitle}</title>`) ||
+            distHtml.includes(`<title>${scaffoldPlaceholderTitle} </title>`))
+        ) {
+          throw new DyadError(
+            `Scaffold validation failed: dist/index.html still has the default scaffold title ("${scaffoldPlaceholderTitle}"). App name codemod may have failed.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 3. Pricing/paywall section marker — the template uses the fixed
+        //    text "Unlock full access" as the pricing heading.
+        if (!distHtml.includes("Unlock full access")) {
+          throw new DyadError(
+            `Scaffold validation failed: pricing/paywall section not found in dist/index.html. Expected "Unlock full access" heading.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        // 4. Checkout button marker — CheckoutButton renders either "Buy Now"
+        //    (configured) or "Checkout not configured" (missing env var).
+        const hasCheckout =
+          distHtml.includes("Buy Now") ||
+          distHtml.includes("Checkout not configured");
+        if (!hasCheckout) {
+          throw new DyadError(
+            `Scaffold validation failed: checkout button not found in dist/index.html. CheckoutButton component may be missing.`,
+            DyadErrorKind.ScaffoldFailure,
+          );
+        }
+
+        pushLog("Scaffold validation passed.");
         return { previewPath, logs };
       } catch (err) {
         if (err instanceof DyadError) throw err;

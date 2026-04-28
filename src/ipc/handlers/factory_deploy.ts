@@ -20,6 +20,7 @@ import { eq } from "drizzle-orm";
 import log from "electron-log";
 import { app } from "electron";
 import { readdir, readFile, stat } from "fs/promises";
+import { parse as dotenvParse } from "dotenv";
 import { createHash } from "crypto";
 import path from "node:path";
 import { readSettings, writeSettings } from "@/main/settings";
@@ -544,12 +545,36 @@ export function registerFactoryDeployHandlers(): void {
       }
 
       const slug = factorySlugFromName(ideaName, runId);
-      const distDir = path.join(
-        app.getPath("userData"),
-        "factory-apps",
-        slug,
-        "dist",
-      );
+      const appDir = path.join(app.getPath("userData"), "factory-apps", slug);
+      const distDir = path.join(appDir, "dist");
+
+      // -----------------------------------------------------------------------
+      // PR #15 — Checkout gate: block deploy when VITE_CHECKOUT_URL is not
+      // configured in the scaffolded app's .env.
+      //
+      // Reads the .env file in the scaffolded app directory. If the file is
+      // missing or the variable is not set to a non-empty value, throw a clear
+      // Precondition error asking the user to configure checkout first.
+      // -----------------------------------------------------------------------
+      let checkoutConfigured = false;
+      try {
+        const envPath = path.join(appDir, ".env");
+        const envContent = await readFile(envPath, "utf-8");
+        const parsed = dotenvParse(envContent);
+        const val = (parsed["VITE_CHECKOUT_URL"] ?? "").trim();
+        if (val.length > 0 && val !== '""' && val !== "''") {
+          checkoutConfigured = true;
+        }
+      } catch {
+        // .env absent or unreadable
+      }
+
+      if (!checkoutConfigured) {
+        throw new DyadError(
+          "Checkout is not configured. Add VITE_CHECKOUT_URL before deploying.",
+          DyadErrorKind.Precondition,
+        );
+      }
 
       // Verify dist/ exists
       try {
