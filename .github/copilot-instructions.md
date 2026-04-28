@@ -1,36 +1,17 @@
-# Copilot Instructions — By Ismael
+# Copilot Instructions — Dyad Reworked
 
-## About
-"By Ismael" is my personal app-building brand. I build unique, premium, out-of-the-box concept apps
-as a solo product factory. Goal: a million-dollar venture.
+## What this is
+A fork of Dyad — a local, open-source AI app builder. Alternative to v0, Lovable, Replit, Bolt.
+I have reworked it for my own use and workflow. This is a developer tool project.
 
-## My style
-- Solo founder — I need to move fast and ship clean
-- Premium feel, unique concepts — not generic CRUD apps
-- Minimize manual work at every step
+## Stack
+- TypeScript, Electron (desktop app)
+- Local AI integrations
+- The original dyad-sh codebase as the base
 
-## Tech stack
-- **Web**: Next.js App Router (TypeScript), Tailwind CSS, shadcn/ui
-- **Mobile**: Expo / React Native (TypeScript)
-- **Backend**: Supabase (PostgreSQL + Edge Functions + Realtime)
-- **Payments**: Lemon Squeezy (subscriptions, one-time, license keys)
-- **Deployment**: Vercel (web), EAS (mobile)
-- **Monorepo**: Turborepo + pnpm
-- **AI**: Anthropic Claude API (claude-sonnet-4-6), OpenAI API
-
-## Coding standards
-- TypeScript strict always — no `any`
-- Reusable packages in `/packages` (payments, ui, utils, types)
-- Lemon Squeezy webhooks always verified with `LEMON_SQUEEZY_WEBHOOK_SECRET`
-- One shared `@repo/payments` package reused across all apps
-- Mobile: use Expo Router file-based routing
-- Animations: Reanimated 3 for mobile, Framer Motion for web
-
-## What I want from Copilot
-- When I scaffold a feature, suggest the full stack (DB schema + RLS + API + UI)
-- Suggest shared package extractions when code could be reused across apps
-- Flag if a pattern would not scale to 10,000 users
-- Always suggest optimistic updates for better UX
-- Remind me about Lemon Squeezy webhook verification on payment handlers
-- Suggest edge cases I might have missed (auth edge cases, race conditions, etc.)
-
+## What Copilot should do
+- Respect the existing dyad architecture — do not suggest full rewrites
+- When I add features, keep them consistent with how dyad already works
+- Prefer minimal, surgical changes over large refactors
+- Flag if a change would break the core app-builder functionality
+- This is a fork — remind me to keep my changes in clean commits so I can track what I changed vs upstream
