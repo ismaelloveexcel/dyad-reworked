@@ -1,0 +1,11 @@
+categories:
+  - title: "New features"
+    labels: ["feature", "enhancement"]
+  - title: "Bug fixes"
+    labels: ["bug", "fix"]
+  - title: "Maintenance"
+    labels: ["dependencies", "chore"]
+change-template: "- $TITLE"
+template: |
+  ## What changed
+  $CHANGES
