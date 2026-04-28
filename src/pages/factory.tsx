@@ -307,6 +307,11 @@ function ScaffoldSection({
 // been scaffolded.  Provides one-click deploy to Vercel (token from settings)
 // or Netlify (token saved inline).  If dist/ is missing the handler returns a
 // clear error asking the user to scaffold first.
+//
+// Simple Mode: only the Vercel button is shown. Netlify button and token form
+// are hidden via the `simpleMode` prop — Netlify code is NOT removed.
+// Safety gates (smoke-test validation, checkout-URL deploy guard) are enforced
+// by the factory_deploy.ts handler and are always active regardless of mode.
 // =============================================================================
 
 function DeploySection({ result, simpleMode }: { result: IdeaEvaluationResult; simpleMode?: boolean }) {
@@ -1094,6 +1099,11 @@ function LaunchKitSection({ result }: { result: IdeaEvaluationResult }) {
 // PR #15 — Simple Factory Mode: Setup checklist component.
 // Shows only the 3 required items (AI key, Vercel token, Checkout URL) so the
 // solo operator knows exactly what to configure before generating and deploying.
+//
+// NOTE: Simple Mode hides advanced controls only. It must not downgrade
+// generated app quality. All safety gates (smoke-test, checkout-URL guard,
+// quality-gate threshold, no-placeholder validation) remain active regardless
+// of this flag.
 // =============================================================================
 
 type SystemStatusForSetup = {
@@ -1164,15 +1174,17 @@ function SimpleSetupChecklist({
             </div>
           </div>
         ))}
-        {/* Checkout URL is per-app (set in each scaffold's .env); shown as a reminder, not a global status */}
+        {/* Checkout URL is per-app (set in each generated app's .env).
+            The system does not read the app .env globally, so this is a
+            reminder only — not a connected status indicator. */}
         <div className="flex items-start gap-3">
           <span className="mt-0.5 w-4 h-4 rounded-full flex items-center justify-center shrink-0 text-[10px] font-bold bg-amber-900/40 text-amber-500 border border-amber-800">
             !
           </span>
           <div className="min-w-0">
-            <p className="text-xs font-medium text-zinc-300">Checkout URL (per app)</p>
+            <p className="text-xs font-medium text-zinc-300">Checkout link required before deploy</p>
             <p className="text-xs text-zinc-500">
-              Set <code className="font-mono">VITE_CHECKOUT_URL</code> in the scaffolded app's <code className="font-mono">.env</code> file.
+              Add <code className="font-mono">VITE_CHECKOUT_URL</code> to the generated app's <code className="font-mono">.env</code> file before deploying.
               Deploy is blocked until this is present.
             </p>
           </div>
